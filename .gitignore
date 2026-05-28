@@ -1,0 +1,14 @@
+.DS_Store
+
+__pycache__/
+*.py[cod]
+
+.venv/
+.frida-venv/
+
+# Generated previews, print images, PLTs, and captured traces.
+output/
+
+# Local copy of the official app used only for native SDK/tracing experiments.
+trace-app/
+
