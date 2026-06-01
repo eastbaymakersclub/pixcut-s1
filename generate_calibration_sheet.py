@@ -25,6 +25,9 @@ PLOT_X_ORIGIN = 7153.75
 PLOT_Y_ORIGIN = -24.75
 PLOT_TRAILER_X = 6476
 PLOT_TRAILER_Y = 0
+# Plot-unit offsets measured from libplt_generator.dylib rectangle output.
+RECT_LEAD_IN_OFFSETS = [(-37, 34), (-17, 27), (-7, 13)]
+RECT_LEAD_OUT_OFFSETS = [(-7, -17), (-17, -31), (-37, -37)]
 
 
 @dataclass(frozen=True)
@@ -326,11 +329,15 @@ def image_point_to_plot(x_px: int, y_px: int) -> tuple[int, int]:
 
 def rect_to_plot_path(box_px: tuple[int, int, int, int]) -> list[tuple[int, int]]:
     x0, y0, x1, y1 = box_px
+    bottom_left = image_point_to_plot(x0, y1)
     top_left = image_point_to_plot(x0, y0)
     top_right = image_point_to_plot(x1, y0)
     bottom_right = image_point_to_plot(x1, y1)
-    bottom_left = image_point_to_plot(x0, y1)
-    return [top_left, top_right, bottom_right, bottom_left, top_left]
+    return [bottom_left, top_left, top_right, bottom_right, bottom_left]
+
+
+def offset_point(point: tuple[int, int], offset: tuple[int, int]) -> tuple[int, int]:
+    return (point[0] + offset[0], point[1] + offset[1])
 
 
 def write_native_rect_plt(
@@ -345,9 +352,13 @@ def write_native_rect_plt(
     """
 
     parts = [f"IN VER0.1.0 KP{kp} "]
-    for box in boxes_px:
-        points = rect_to_plot_path(box)
-        first_x, first_y = points[0]
+    for box in sorted(boxes_px, key=lambda candidate: rect_to_plot_path(candidate)[0]):
+        cut_points = rect_to_plot_path(box)
+        start = cut_points[0]
+        lead_in_points = [offset_point(start, offset) for offset in RECT_LEAD_IN_OFFSETS]
+        lead_out_points = [offset_point(start, offset) for offset in RECT_LEAD_OUT_OFFSETS]
+        points = [*lead_in_points, *cut_points, *lead_out_points]
+        first_x, first_y = lead_in_points[0]
         parts.append(f"U{first_x},{first_y} ")
         for x, y in points:
             parts.append(f"D{x},{y} ")

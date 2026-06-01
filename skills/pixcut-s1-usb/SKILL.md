@@ -87,7 +87,8 @@ Use `--dilation 0` when the cutline should sit at the artwork edge. Use the
 tool default `--dilation 1.5` when intentionally expanding around opaque art.
 For simple rectangle calibration targets, `generate_calibration_sheet.py`
 writes a native `_native_rects.plt` file directly, so the app dylib is not
-needed for those rectangle-only cuts.
+needed for those rectangle-only cuts. Native rectangles include dylib-style
+lead-in/lead-out strokes at the lower-left starting corner.
 
 For custom sheets, inspect the preview for clipping, overlap, edge crowding,
 and mismatched print/cut geometry before sending the job. Ask for user review

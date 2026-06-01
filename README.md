@@ -72,7 +72,7 @@ For 4x7 sticker paper, the official app's default preview settings generate PLT 
 
 If the requested cutline should sit exactly on the alpha edge of a design, use `--dilation 0`.
 
-For simple rectangular calibration targets, `generate_calibration_sheet.py` also writes a native PixCut PLT file directly. That path does not require `libplt_generator.dylib`; it is currently only intended for axis-aligned rectangles on the validated `1200x2100` 4x7 sticker raster.
+For simple rectangular calibration targets, `generate_calibration_sheet.py` also writes a native PixCut PLT file directly. That path does not require `libplt_generator.dylib`; it is currently only intended for axis-aligned rectangles on the validated `1200x2100` 4x7 sticker raster. Native rectangles include dylib-style lead-in/lead-out strokes at the lower-left starting corner so the blade enters and exits outside the meaningful cut edge.
 
 The validated C signatures are:
 
@@ -120,7 +120,7 @@ The generator writes:
 - transparent cut-source PNG
 - cut mask PNG
 - preview PNG with the cutlines overlaid
-- native rectangle PLT for the cut targets
+- native rectangle PLT for the cut targets, including lower-left lead-in/lead-out strokes
 - metadata JSON
 - a measurement worksheet Markdown file
 
