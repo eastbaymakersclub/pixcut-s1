@@ -40,6 +40,10 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
   `300dpi`, which is `101.6 x 177.8mm` and `11.81102362` dots/mm. The sticker
   printing spec is about `100 x 170mm`; that is the advertised printable area
   inside the full raster, not the raster scale.
+- The current local printer profile is in `pixcut_s1_profile.json`. For
+  dimensionally accurate local layouts, use print scale correction
+  `0.9891938513 x 0.9843598616` and safe print margins top `1.3mm`, right
+  `1.2mm`, bottom `1.3mm`, left `0.6mm`.
 - Leave at least a `2mm` top feed/print guard. The top about `1.5mm` may not
   image if art starts at `y=0`.
 - Do not use a `1200x2400` canvas with the current 4x7 path; it printed and
@@ -116,14 +120,13 @@ record edge/inset visibility, H/V print scale, and cut target offsets. For cut
 targets, measure from the printed blue center cross to each physical cut edge;
 expected distance is half the cut target size.
 
-To apply measured print scale correction after the 300dpi base model,
-regenerate with residual `expected/measured` factors. The local printer's
-equivalent residual correction from the first calibration pass is:
+`generate_calibration_sheet.py` defaults to the current local print scale
+correction from `pixcut_s1_profile.json`. To override it explicitly:
 
 ```sh
 python generate_calibration_sheet.py \
   --basename pixcut_s1_calibration_local_residual \
-  --print-scale-correction 0.9935215744x0.9843598616
+  --print-scale-correction 0.9891938513x0.9843598616
 python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_local_residual_print.jpg \
   output/calibration/pixcut_s1_calibration_local_residual_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
@@ -131,10 +134,10 @@ python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_local_re
 ```
 
 Residual scale correction is applied around the center of the 4x7 raster. The
-older `0.9778755653x0.9411764706` correction belonged to the obsolete
-`100x170mm`-as-full-raster model. It should not be used as a generic default,
-though the native-PLT job using that correction did complete successfully as
-direct USB job `52`.
+latest X factor came from job `53`, where `H80` measured `80.35mm`; `V150`
+measured on target, so the previous Y factor stayed unchanged. The older
+`0.9778755653x0.9411764706` correction belonged to the obsolete
+`100x170mm`-as-full-raster model and should not be used.
 
 ## Print And Cut
 

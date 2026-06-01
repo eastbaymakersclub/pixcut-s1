@@ -20,6 +20,7 @@ DEFAULT_CANVAS_PX = (1200, 2100)
 DEFAULT_ADVERTISED_PRINTABLE_MM = (100.0, 170.0)
 DEFAULT_CUT_TARGET_MM = (14.0, 14.0)
 DEFAULT_JPG_QUALITY = 95
+DEFAULT_PRINT_SCALE_CORRECTION = (0.9891938513, 0.9843598616)
 # Fitted against libplt_generator.dylib output for 1200x2100 4x7 masks.
 # PLT coordinates are rotated relative to raster coordinates.
 PLOT_X_ORIGIN = 7153.032085400178
@@ -523,7 +524,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--basename", default="pixcut_s1_calibration_4x7_300dpi")
-    parser.add_argument("--print-scale-correction", type=lambda value: parse_pair(value, "x", float), default=(1.0, 1.0))
+    parser.add_argument(
+        "--print-scale-correction",
+        type=lambda value: parse_pair(value, "x", float),
+        default=DEFAULT_PRINT_SCALE_CORRECTION,
+    )
     parser.add_argument("--print-offset-mm", type=lambda value: parse_pair(value, "x", float), default=(0.0, 0.0))
     return parser
 

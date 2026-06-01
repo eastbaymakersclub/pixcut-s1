@@ -1,0 +1,22 @@
+{
+  "model": "Liene PixCut S1",
+  "raster_px": [1200, 2100],
+  "dpi": 300.0,
+  "dots_per_mm": 11.811023622047244,
+  "canvas_mm": [101.6, 177.8],
+  "advertised_printable_mm": [100.0, 170.0],
+  "print_scale_correction": [0.9891938513, 0.9843598616],
+  "effective_dots_per_mm": [11.6833919445, 11.626297578],
+  "safe_print_margin_mm": {
+    "top": 1.3,
+    "right": 1.2,
+    "bottom": 1.3,
+    "left": 0.6
+  },
+  "plt_units_per_mm": 40.52,
+  "notes": [
+    "Scale correction is local to this printer/media/ribbon path.",
+    "Margins are measured non-printing/unsafe edge regions from the latest calibration sheet.",
+    "Native rectangle PLT transform is fitted against libplt_generator.dylib."
+  ]
+}

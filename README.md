@@ -113,6 +113,13 @@ python pixcut_usb.py print-cut output/ebmc_sticker_sheet_4x7_print.jpg \
 
 The working raster for 4x7 sticker jobs is `1200x2100`. At the advertised `300dpi`, that is exactly `4 x 7 inches` / `101.6 x 177.8mm`, or `11.81102362` dots/mm. `generate_calibration_sheet.py` uses that 300dpi full-raster coordinate system by default. The sticker-mode printable-area spec is still `3.9 x 6.7 inches` / about `100 x 170mm`, so treat that as the advertised printable region inside the 4x7 raster, not as the raster's physical scale.
 
+The current local printer/media profile is recorded in `pixcut_s1_profile.json`. For dimensionally accurate local layouts, use:
+
+- print scale correction: `0.9891938513 x 0.9843598616`
+- safe print margins: top `1.3mm`, right `1.2mm`, bottom `1.3mm`, left `0.6mm`
+
+`generate_calibration_sheet.py` defaults to that current local print scale correction. Override `--print-scale-correction` only when testing a new profile.
+
 Generate a repeatable calibration print/cut sheet:
 
 ```bash
@@ -135,15 +142,15 @@ The generator writes:
 
 The calibration sheet includes edge/inset printability rectangles, H/V print scale bars, and seven rectangular cut registration targets. For each cut target, measure from the printed blue center cross to the physical cut edge; the expected distance is half the target size. Earlier direct USB calibration jobs verified the seven-target workflow: job `51` printed/cut successfully, and job `52` verified generated native rectangle PLT output.
 
-If printed measurement spans are oversized after the 300dpi base model, regenerate with residual correction factors:
+To regenerate using an explicit residual correction:
 
 ```bash
 python generate_calibration_sheet.py \
   --basename pixcut_s1_calibration_local_residual \
-  --print-scale-correction 0.9935215744x0.9843598616
+  --print-scale-correction 0.9891938513x0.9843598616
 ```
 
-Residual scale correction is applied around the center of the 4x7 raster. The factors above are equivalent to the corrected local calibration after removing the old `100x170mm`-as-full-raster assumption. The earlier direct USB calibration job `52` used the generated native rectangle PLT, produced seven cut contours, completed successfully, and returned to `job-state: 9`. Its large correction factors, `0.9778755653 x 0.9411764706`, should not be used as generic defaults because most of that correction came from the wrong base coordinate model.
+Residual scale correction is applied around the center of the 4x7 raster. The latest X factor came from job `53`, where `H80` measured `80.35mm`; `V150` measured on target, so the previous Y factor stayed unchanged. The older `0.9778755653 x 0.9411764706` correction should not be used because most of that correction came from the wrong `100x170mm`-as-full-raster model.
 
 ## Job sending
 
