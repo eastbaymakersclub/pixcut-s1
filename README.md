@@ -102,14 +102,14 @@ python pixcut_usb.py print-cut output/ebmc_sticker_sheet_4x7_print.jpg \
 
 ## Calibration workflow
 
-The sticker-mode spec is `3.9 x 6.7 inches` / `100 x 170mm`. The current working raster for 4x7 sticker jobs is still `1200x2100`, so `generate_calibration_sheet.py` defaults to a nominal `100x170mm` coordinate system on that raster. This intentionally makes X and Y nominal pixel density different until measured calibration data tells us the real physical mapping.
+The working raster for 4x7 sticker jobs is `1200x2100`. At the advertised `300dpi`, that is exactly `4 x 7 inches` / `101.6 x 177.8mm`, or `11.81102362` dots/mm. `generate_calibration_sheet.py` uses that 300dpi full-raster coordinate system by default. The sticker-mode printable-area spec is still `3.9 x 6.7 inches` / about `100 x 170mm`, so treat that as the advertised printable region inside the 4x7 raster, not as the raster's physical scale.
 
 Generate a repeatable calibration print/cut sheet:
 
 ```bash
 python generate_calibration_sheet.py
-python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
-  output/calibration/pixcut_s1_calibration_100x170_native_rects.plt \
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_4x7_300dpi_print.jpg \
+  output/calibration/pixcut_s1_calibration_4x7_300dpi_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
@@ -124,18 +124,17 @@ The generator writes:
 - metadata JSON
 - a measurement worksheet Markdown file
 
-The calibration sheet includes edge/inset printability rectangles, H/V print scale bars, and seven rectangular cut registration targets. For each cut target, measure from the printed blue center cross to the physical cut edge; the expected distance is half the target size. Direct USB calibration job `51` printed/cut successfully with seven cut contours and returned to `job-state: 9`.
+The calibration sheet includes edge/inset printability rectangles, H/V print scale bars, and seven rectangular cut registration targets. For each cut target, measure from the printed blue center cross to the physical cut edge; the expected distance is half the target size. Earlier direct USB calibration jobs verified the seven-target workflow: job `51` printed/cut successfully, and job `52` verified generated native rectangle PLT output.
 
-If printed measurement spans are oversized, regenerate with correction factors:
+If printed measurement spans are oversized after the 300dpi base model, regenerate with residual correction factors:
 
 ```bash
 python generate_calibration_sheet.py \
-  --basename pixcut_s1_calibration_scaled_100x170 \
-  --print-scale-correction 0.9778755653x0.9411764706 \
-  --transform-origin center
+  --basename pixcut_s1_calibration_local_residual \
+  --print-scale-correction 0.9935215744x0.9843598616
 ```
 
-Those example factors came from `expected / measured`: `80 / 81.81` in X and a measured `140 / 148.75` span in Y. The centered transform keeps the coordinate system centered on the nominal sheet while shrinking or expanding the print artwork. Direct USB calibration job `52` used the generated native rectangle PLT, produced seven cut contours, completed successfully, and returned to `job-state: 9`.
+Residual scale correction is applied around the center of the 4x7 raster. The factors above are equivalent to the corrected local calibration after removing the old `100x170mm`-as-full-raster assumption. The earlier direct USB calibration job `52` used the generated native rectangle PLT, produced seven cut contours, completed successfully, and returned to `job-state: 9`. Its large correction factors, `0.9778755653 x 0.9411764706`, should not be used as generic defaults because most of that correction came from the wrong base coordinate model.
 
 ## Job sending
 
@@ -197,8 +196,8 @@ pixcut-s1/output/official_app_job_46_stina/
 
 4x7 layout calibration:
 
-- Use a `1200x2100` canvas for the working `4x7` media path. The nominal sticker printing spec is `100x170mm`. A `1200x2400` test printed/cut, but the output was distorted: the print measured about `41mm x 36mm` while cuts measured about `36mm x 36mm`.
-- The top approximately `1.5mm` of the sheet may not image if artwork starts at physical `y=0`. Future layouts should reserve at least a `2mm` top feed/print guard (`24px` at the current `12px/mm`) and start the first cut/art row at `y>=24px`.
+- Use a `1200x2100` canvas for the working `4x7` media path. Model it as `4 x 7 inches` at `300dpi`, which is `101.6 x 177.8mm` and `11.81102362` dots/mm. The advertised sticker printable area is about `100x170mm` inside that raster. A `1200x2400` test printed/cut, but the output was distorted: the print measured about `41mm x 36mm` while cuts measured about `36mm x 36mm`.
+- The top approximately `1.5mm` of the sheet may not image if artwork starts at physical `y=0`. Future layouts should reserve at least a `2mm` top feed/print guard, about `24px` at `300dpi`, and start the first cut/art row at `y>=24px`.
 
 To resend those exact known-good official artifacts through the Python sender:
 

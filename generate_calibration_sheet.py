@@ -14,6 +14,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_OUT = ROOT / "output" / "calibration"
+DEFAULT_DPI = 300.0
+DEFAULT_DOTS_PER_MM = DEFAULT_DPI / 25.4
+DEFAULT_CANVAS_PX = (1200, 2100)
+DEFAULT_ADVERTISED_PRINTABLE_MM = (100.0, 170.0)
+DEFAULT_CUT_TARGET_MM = (14.0, 14.0)
+DEFAULT_JPG_QUALITY = 95
 PLOT_UNIT_SCALE = 1643 / 480
 PLOT_X_ORIGIN = 7153.75
 PLOT_Y_ORIGIN = -24.75
@@ -37,42 +43,48 @@ class CutTarget:
 @dataclass(frozen=True)
 class CalibrationConfig:
     canvas_px: tuple[int, int]
-    nominal_media_mm: tuple[float, float]
+    canvas_mm: tuple[float, float]
+    advertised_printable_mm: tuple[float, float]
     basename: str
     cut_target_mm: tuple[float, float]
     horizontal_scale_bar_mm: tuple[float, float, float]
     vertical_scale_bar_mm: tuple[float, float, float]
     print_scale_correction: tuple[float, float]
     print_offset_mm: tuple[float, float]
-    transform_origin: str
 
     @property
-    def px_per_mm_x(self) -> float:
-        return self.canvas_px[0] / self.nominal_media_mm[0]
+    def base_dots_per_mm_x(self) -> float:
+        return DEFAULT_DOTS_PER_MM
 
     @property
-    def px_per_mm_y(self) -> float:
-        return self.canvas_px[1] / self.nominal_media_mm[1]
+    def base_dots_per_mm_y(self) -> float:
+        return DEFAULT_DOTS_PER_MM
+
+    @property
+    def effective_dots_per_mm_x(self) -> float:
+        return self.base_dots_per_mm_x * self.print_scale_correction[0]
+
+    @property
+    def effective_dots_per_mm_y(self) -> float:
+        return self.base_dots_per_mm_y * self.print_scale_correction[1]
 
     def transformed_mm(self, x_mm: float, y_mm: float) -> tuple[float, float]:
         scale_x, scale_y = self.print_scale_correction
         offset_x, offset_y = self.print_offset_mm
-        if self.transform_origin == "center":
-            center_x = self.nominal_media_mm[0] / 2
-            center_y = self.nominal_media_mm[1] / 2
-            return (
-                center_x + (x_mm - center_x) * scale_x + offset_x,
-                center_y + (y_mm - center_y) * scale_y + offset_y,
-            )
-        return (x_mm * scale_x + offset_x, y_mm * scale_y + offset_y)
+        center_x = self.canvas_mm[0] / 2
+        center_y = self.canvas_mm[1] / 2
+        return (
+            center_x + (x_mm - center_x) * scale_x + offset_x,
+            center_y + (y_mm - center_y) * scale_y + offset_y,
+        )
 
     def x_px(self, mm: float) -> int:
         x_mm, _ = self.transformed_mm(mm, 0)
-        return round(x_mm * self.px_per_mm_x)
+        return round(x_mm * self.base_dots_per_mm_x)
 
     def y_px(self, mm: float) -> int:
         _, y_mm = self.transformed_mm(0, mm)
-        return round(y_mm * self.px_per_mm_y)
+        return round(y_mm * self.base_dots_per_mm_y)
 
     def box_px(self, x_mm: float, y_mm: float, w_mm: float, h_mm: float) -> tuple[int, int, int, int]:
         x0 = self.x_px(x_mm)
@@ -177,7 +189,7 @@ def draw_crosshair(
 
 
 def draw_grid(draw: ImageDraw.ImageDraw, cfg: CalibrationConfig) -> None:
-    width_mm, height_mm = cfg.nominal_media_mm
+    width_mm, height_mm = cfg.canvas_mm
     light = (226, 229, 232)
     mid = (188, 193, 199)
     dark = (112, 118, 125)
@@ -198,7 +210,7 @@ def draw_grid(draw: ImageDraw.ImageDraw, cfg: CalibrationConfig) -> None:
 
 
 def draw_edge_printability_marks(draw: ImageDraw.ImageDraw, cfg: CalibrationConfig) -> None:
-    width_mm, height_mm = cfg.nominal_media_mm
+    width_mm, height_mm = cfg.canvas_mm
     colors = {
         0: (15, 15, 15),
         1: (210, 30, 30),
@@ -357,9 +369,12 @@ def write_measurement_sheet(
 
     content = f"""# PixCut S1 Calibration Measurements
 
-Generated for nominal media `{cfg.nominal_media_mm[0]:g} x {cfg.nominal_media_mm[1]:g} mm` on raster `{cfg.canvas_px[0]} x {cfg.canvas_px[1]} px`.
+Generated for raster canvas `{cfg.canvas_mm[0]:.3f} x {cfg.canvas_mm[1]:.3f} mm` on `{cfg.canvas_px[0]} x {cfg.canvas_px[1]} px`.
 
-Print scale correction: X `{cfg.print_scale_correction[0]:.7f}`, Y `{cfg.print_scale_correction[1]:.7f}`, origin `{cfg.transform_origin}`.
+Base dots/mm: X `{cfg.base_dots_per_mm_x:.8f}`, Y `{cfg.base_dots_per_mm_y:.8f}`.
+Advertised sticker printable spec: `{cfg.advertised_printable_mm[0]:g} x {cfg.advertised_printable_mm[1]:g} mm`.
+Residual print scale correction: X `{cfg.print_scale_correction[0]:.7f}`, Y `{cfg.print_scale_correction[1]:.7f}`, centered on the 4x7 raster.
+Effective layout dots/mm: X `{cfg.effective_dots_per_mm_x:.8f}`, Y `{cfg.effective_dots_per_mm_y:.8f}`.
 
 ## Print Area
 
@@ -401,7 +416,7 @@ Measure the physical cutout width/height for any targets that are easy to handle
     path.write_text(content)
 
 
-def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict[str, Path]:
+def generate(cfg: CalibrationConfig, output_dir: Path) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print_image = Image.new("RGB", cfg.canvas_px, (255, 255, 255))
@@ -418,9 +433,14 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
 
     draw_text(
         print_draw,
-        (cfg.x_px(24), cfg.y_px(3.1)),
-        f"PixCut S1 calibration | nominal {cfg.nominal_media_mm[0]:g}x{cfg.nominal_media_mm[1]:g}mm | canvas {cfg.canvas_px[0]}x{cfg.canvas_px[1]}",
-        18,
+        (cfg.x_px(11), cfg.y_px(3.1)),
+        (
+            "PixCut S1 calibration | "
+            f"{cfg.canvas_px[0]}x{cfg.canvas_px[1]} @ {cfg.base_dots_per_mm_x * 25.4:.0f}dpi | "
+            f"canvas {cfg.canvas_mm[0]:.1f}x{cfg.canvas_mm[1]:.1f}mm | "
+            f"print spec {cfg.advertised_printable_mm[0]:g}x{cfg.advertised_printable_mm[1]:g}mm"
+        ),
+        15,
         (20, 20, 20),
         bold=True,
     )
@@ -439,7 +459,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
     measurements_md = output_dir / f"{cfg.basename}_measurements.md"
 
     print_image.save(print_png)
-    print_image.save(print_jpg, quality=jpg_quality, subsampling=0)
+    print_image.save(print_jpg, quality=DEFAULT_JPG_QUALITY, subsampling=0)
     cut_source.save(cut_source_png)
     cut_mask.save(cut_mask_png)
     preview.save(preview_png)
@@ -448,8 +468,10 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
 
     metadata = {
         "config": asdict(cfg),
-        "px_per_mm_x": cfg.px_per_mm_x,
-        "px_per_mm_y": cfg.px_per_mm_y,
+        "base_dots_per_mm_x": cfg.base_dots_per_mm_x,
+        "base_dots_per_mm_y": cfg.base_dots_per_mm_y,
+        "effective_dots_per_mm_x": cfg.effective_dots_per_mm_x,
+        "effective_dots_per_mm_y": cfg.effective_dots_per_mm_y,
         "scale_bars": scale_bars,
         "cut_targets": [
             {
@@ -486,31 +508,30 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--basename", default="pixcut_s1_calibration_100x170")
-    parser.add_argument("--canvas-px", type=lambda value: parse_pair(value, "x", int), default=(1200, 2100))
-    parser.add_argument("--nominal-media-mm", type=lambda value: parse_pair(value, "x", float), default=(100.0, 170.0))
-    parser.add_argument("--cut-target-mm", type=lambda value: parse_pair(value, "x", float), default=(14.0, 14.0))
+    parser.add_argument("--basename", default="pixcut_s1_calibration_4x7_300dpi")
     parser.add_argument("--print-scale-correction", type=lambda value: parse_pair(value, "x", float), default=(1.0, 1.0))
     parser.add_argument("--print-offset-mm", type=lambda value: parse_pair(value, "x", float), default=(0.0, 0.0))
-    parser.add_argument("--transform-origin", choices=("origin", "center"), default="origin")
-    parser.add_argument("--jpg-quality", type=int, default=95)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    canvas_mm = (
+        DEFAULT_CANVAS_PX[0] / DEFAULT_DOTS_PER_MM,
+        DEFAULT_CANVAS_PX[1] / DEFAULT_DOTS_PER_MM,
+    )
     cfg = CalibrationConfig(
-        canvas_px=args.canvas_px,
-        nominal_media_mm=args.nominal_media_mm,
+        canvas_px=DEFAULT_CANVAS_PX,
+        canvas_mm=canvas_mm,
+        advertised_printable_mm=DEFAULT_ADVERTISED_PRINTABLE_MM,
         basename=args.basename,
-        cut_target_mm=args.cut_target_mm,
+        cut_target_mm=DEFAULT_CUT_TARGET_MM,
         horizontal_scale_bar_mm=(10.0, 90.0, 62.0),
         vertical_scale_bar_mm=(62.0, 10.0, 160.0),
         print_scale_correction=args.print_scale_correction,
         print_offset_mm=args.print_offset_mm,
-        transform_origin=args.transform_origin,
     )
-    outputs = generate(cfg, args.output_dir, args.jpg_quality)
+    outputs = generate(cfg, args.output_dir)
     for path in outputs.values():
         print(path)
     return 0

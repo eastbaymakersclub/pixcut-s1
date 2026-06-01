@@ -36,9 +36,10 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
 
 - USB VID/PID: `302c:3101`.
 - Combined print/cut media: `--media-size 4x7 --media-type sticker_4x7`.
-- The working 4x7 raster is `1200x2100` px. The nominal sticker printing spec
-  is `100 x 170mm`, so calibration uses `100x170mm` as the coordinate system
-  until measured correction data says otherwise.
+- The working 4x7 raster is `1200x2100` px. Treat it as `4 x 7 inches` at
+  `300dpi`, which is `101.6 x 177.8mm` and `11.81102362` dots/mm. The sticker
+  printing spec is about `100 x 170mm`; that is the advertised printable area
+  inside the full raster, not the raster scale.
 - Leave at least a `2mm` top feed/print guard. The top about `1.5mm` may not
   image if art starts at `y=0`.
 - Do not use a `1200x2400` canvas with the current 4x7 path; it printed and
@@ -99,35 +100,37 @@ print/cut registration data.
 
 ```sh
 python generate_calibration_sheet.py
-python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
-  output/calibration/pixcut_s1_calibration_100x170_native_rects.plt \
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_4x7_300dpi_print.jpg \
+  output/calibration/pixcut_s1_calibration_4x7_300dpi_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
-Review `output/calibration/pixcut_s1_calibration_100x170_preview.png` before
+Review `output/calibration/pixcut_s1_calibration_4x7_300dpi_preview.png` before
 printing. After printing, use the generated measurements Markdown file to
 record edge/inset visibility, H/V print scale, and cut target offsets. For cut
 targets, measure from the printed blue center cross to each physical cut edge;
 expected distance is half the cut target size.
 
-To apply measured print scale correction, regenerate with `expected/measured`
-factors. Example from a sheet that measured `80mm -> 81.81mm` horizontally and
-a `140mm -> 148.75mm` span vertically:
+To apply measured print scale correction after the 300dpi base model,
+regenerate with residual `expected/measured` factors. The local printer's
+equivalent residual correction from the first calibration pass is:
 
 ```sh
 python generate_calibration_sheet.py \
-  --basename pixcut_s1_calibration_scaled_100x170 \
-  --print-scale-correction 0.9778755653x0.9411764706 \
-  --transform-origin center
-python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_scaled_100x170_print.jpg \
-  output/calibration/pixcut_s1_calibration_scaled_100x170_native_rects.plt \
+  --basename pixcut_s1_calibration_local_residual \
+  --print-scale-correction 0.9935215744x0.9843598616
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_local_residual_print.jpg \
+  output/calibration/pixcut_s1_calibration_local_residual_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
-This native-PLT scaled calibration completed successfully as direct USB job
-`52`, reported seven cut contours, and returned to `job-state: 9`.
+Residual scale correction is applied around the center of the 4x7 raster. The
+older `0.9778755653x0.9411764706` correction belonged to the obsolete
+`100x170mm`-as-full-raster model. It should not be used as a generic default,
+though the native-PLT job using that correction did complete successfully as
+direct USB job `52`.
 
 ## Print And Cut
 
