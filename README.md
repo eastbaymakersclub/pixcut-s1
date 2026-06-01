@@ -72,6 +72,8 @@ For 4x7 sticker paper, the official app's default preview settings generate PLT 
 
 If the requested cutline should sit exactly on the alpha edge of a design, use `--dilation 0`.
 
+For simple rectangular calibration targets, `generate_calibration_sheet.py` also writes a native PixCut PLT file directly. That path does not require `libplt_generator.dylib`; it is currently only intended for axis-aligned rectangles on the validated `1200x2100` 4x7 sticker raster.
+
 The validated C signatures are:
 
 ```c
@@ -106,11 +108,8 @@ Generate a repeatable calibration print/cut sheet:
 
 ```bash
 python generate_calibration_sheet.py
-python pixcut_usb.py make-plt output/calibration/pixcut_s1_calibration_100x170_cut_source.png \
-  -o output/calibration/pixcut_s1_calibration_100x170.plt \
-  --media-type sticker_4x7 --dilation 0 --kp 42
 python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
-  output/calibration/pixcut_s1_calibration_100x170.plt \
+  output/calibration/pixcut_s1_calibration_100x170_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
@@ -121,10 +120,22 @@ The generator writes:
 - transparent cut-source PNG
 - cut mask PNG
 - preview PNG with the cutlines overlaid
+- native rectangle PLT for the cut targets
 - metadata JSON
 - a measurement worksheet Markdown file
 
 The calibration sheet includes edge/inset printability rectangles, H/V print scale bars, and seven rectangular cut registration targets. For each cut target, measure from the printed blue center cross to the physical cut edge; the expected distance is half the target size. Direct USB calibration job `51` printed/cut successfully with seven cut contours and returned to `job-state: 9`.
+
+If printed measurement spans are oversized, regenerate with correction factors:
+
+```bash
+python generate_calibration_sheet.py \
+  --basename pixcut_s1_calibration_scaled_100x170 \
+  --print-scale-correction 0.9778755653x0.9411764706 \
+  --transform-origin center
+```
+
+Those example factors came from `expected / measured`: `80 / 81.81` in X and a measured `140 / 148.75` span in Y. The centered transform keeps the coordinate system centered on the nominal sheet while shrinking or expanding the print artwork. Direct USB calibration job `52` used the generated native rectangle PLT, produced seven cut contours, completed successfully, and returned to `job-state: 9`.
 
 ## Job sending
 

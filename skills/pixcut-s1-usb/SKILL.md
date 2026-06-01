@@ -84,6 +84,9 @@ python pixcut_usb.py make-plt output/cut_source.png \
 
 Use `--dilation 0` when the cutline should sit at the artwork edge. Use the
 tool default `--dilation 1.5` when intentionally expanding around opaque art.
+For simple rectangle calibration targets, `generate_calibration_sheet.py`
+writes a native `_native_rects.plt` file directly, so the app dylib is not
+needed for those rectangle-only cuts.
 
 For custom sheets, inspect the preview for clipping, overlap, edge crowding,
 and mismatched print/cut geometry before sending the job. Ask for user review
@@ -96,11 +99,8 @@ print/cut registration data.
 
 ```sh
 python generate_calibration_sheet.py
-python pixcut_usb.py make-plt output/calibration/pixcut_s1_calibration_100x170_cut_source.png \
-  -o output/calibration/pixcut_s1_calibration_100x170.plt \
-  --media-type sticker_4x7 --dilation 0 --kp 42
 python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
-  output/calibration/pixcut_s1_calibration_100x170.plt \
+  output/calibration/pixcut_s1_calibration_100x170_native_rects.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
@@ -110,6 +110,24 @@ printing. After printing, use the generated measurements Markdown file to
 record edge/inset visibility, H/V print scale, and cut target offsets. For cut
 targets, measure from the printed blue center cross to each physical cut edge;
 expected distance is half the cut target size.
+
+To apply measured print scale correction, regenerate with `expected/measured`
+factors. Example from a sheet that measured `80mm -> 81.81mm` horizontally and
+a `140mm -> 148.75mm` span vertically:
+
+```sh
+python generate_calibration_sheet.py \
+  --basename pixcut_s1_calibration_scaled_100x170 \
+  --print-scale-correction 0.9778755653x0.9411764706 \
+  --transform-origin center
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_scaled_100x170_print.jpg \
+  output/calibration/pixcut_s1_calibration_scaled_100x170_native_rects.plt \
+  --media-size 4x7 --media-type sticker_4x7 \
+  --execute --wait-after-send 360 --poll-interval 5
+```
+
+This native-PLT scaled calibration completed successfully as direct USB job
+`52`, reported seven cut contours, and returned to `job-state: 9`.
 
 ## Print And Cut
 

@@ -14,6 +14,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_OUT = ROOT / "output" / "calibration"
+PLOT_UNIT_SCALE = 1643 / 480
+PLOT_X_ORIGIN = 7153.75
+PLOT_Y_ORIGIN = -24.75
+PLOT_TRAILER_X = 6476
+PLOT_TRAILER_Y = 0
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,9 @@ class CalibrationConfig:
     cut_target_mm: tuple[float, float]
     horizontal_scale_bar_mm: tuple[float, float, float]
     vertical_scale_bar_mm: tuple[float, float, float]
+    print_scale_correction: tuple[float, float]
+    print_offset_mm: tuple[float, float]
+    transform_origin: str
 
     @property
     def px_per_mm_x(self) -> float:
@@ -46,11 +54,25 @@ class CalibrationConfig:
     def px_per_mm_y(self) -> float:
         return self.canvas_px[1] / self.nominal_media_mm[1]
 
+    def transformed_mm(self, x_mm: float, y_mm: float) -> tuple[float, float]:
+        scale_x, scale_y = self.print_scale_correction
+        offset_x, offset_y = self.print_offset_mm
+        if self.transform_origin == "center":
+            center_x = self.nominal_media_mm[0] / 2
+            center_y = self.nominal_media_mm[1] / 2
+            return (
+                center_x + (x_mm - center_x) * scale_x + offset_x,
+                center_y + (y_mm - center_y) * scale_y + offset_y,
+            )
+        return (x_mm * scale_x + offset_x, y_mm * scale_y + offset_y)
+
     def x_px(self, mm: float) -> int:
-        return round(mm * self.px_per_mm_x)
+        x_mm, _ = self.transformed_mm(mm, 0)
+        return round(x_mm * self.px_per_mm_x)
 
     def y_px(self, mm: float) -> int:
-        return round(mm * self.px_per_mm_y)
+        _, y_mm = self.transformed_mm(0, mm)
+        return round(y_mm * self.px_per_mm_y)
 
     def box_px(self, x_mm: float, y_mm: float, w_mm: float, h_mm: float) -> tuple[int, int, int, int]:
         x0 = self.x_px(x_mm)
@@ -283,6 +305,44 @@ def build_preview(print_image: Image.Image, cut_mask: Image.Image) -> Image.Imag
     return preview.convert("RGB")
 
 
+def image_point_to_plot(x_px: int, y_px: int) -> tuple[int, int]:
+    return (
+        round(PLOT_X_ORIGIN - y_px * PLOT_UNIT_SCALE),
+        round(PLOT_Y_ORIGIN + x_px * PLOT_UNIT_SCALE),
+    )
+
+
+def rect_to_plot_path(box_px: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+    x0, y0, x1, y1 = box_px
+    top_left = image_point_to_plot(x0, y0)
+    top_right = image_point_to_plot(x1, y0)
+    bottom_right = image_point_to_plot(x1, y1)
+    bottom_left = image_point_to_plot(x0, y1)
+    return [top_left, top_right, bottom_right, bottom_left, top_left]
+
+
+def write_native_rect_plt(
+    path: Path,
+    boxes_px: Iterable[tuple[int, int, int, int]],
+    kp: int = 42,
+) -> None:
+    """Write simple rectangular PixCut PLT paths without libplt_generator.dylib.
+
+    The coordinate transform is derived from official PLT output for rectangular
+    masks on the PixCut S1 1200x2100 4x7 sticker raster.
+    """
+
+    parts = [f"IN VER0.1.0 KP{kp} "]
+    for box in boxes_px:
+        points = rect_to_plot_path(box)
+        first_x, first_y = points[0]
+        parts.append(f"U{first_x},{first_y} ")
+        for x, y in points:
+            parts.append(f"D{x},{y} ")
+    parts.append(f"U{PLOT_TRAILER_X},{PLOT_TRAILER_Y}  @ ")
+    path.write_text("".join(parts))
+
+
 def write_measurement_sheet(
     path: Path,
     cfg: CalibrationConfig,
@@ -298,6 +358,8 @@ def write_measurement_sheet(
     content = f"""# PixCut S1 Calibration Measurements
 
 Generated for nominal media `{cfg.nominal_media_mm[0]:g} x {cfg.nominal_media_mm[1]:g} mm` on raster `{cfg.canvas_px[0]} x {cfg.canvas_px[1]} px`.
+
+Print scale correction: X `{cfg.print_scale_correction[0]:.7f}`, Y `{cfg.print_scale_correction[1]:.7f}`, origin `{cfg.transform_origin}`.
 
 ## Print Area
 
@@ -352,6 +414,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
     scale_bars = draw_scale_bars(print_draw, cfg)
     targets = default_cut_targets(cfg)
     draw_cut_targets(print_draw, cut_mask_draw, cfg, targets)
+    target_boxes_px = [cfg.box_px(target.x_mm, target.y_mm, target.width_mm, target.height_mm) for target in targets]
 
     draw_text(
         print_draw,
@@ -371,6 +434,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
     cut_source_png = output_dir / f"{cfg.basename}_cut_source.png"
     cut_mask_png = output_dir / f"{cfg.basename}_cut_mask.png"
     preview_png = output_dir / f"{cfg.basename}_preview.png"
+    native_plt = output_dir / f"{cfg.basename}_native_rects.plt"
     metadata_json = output_dir / f"{cfg.basename}_metadata.json"
     measurements_md = output_dir / f"{cfg.basename}_measurements.md"
 
@@ -379,6 +443,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
     cut_source.save(cut_source_png)
     cut_mask.save(cut_mask_png)
     preview.save(preview_png)
+    write_native_rect_plt(native_plt, target_boxes_px)
     write_measurement_sheet(measurements_md, cfg, scale_bars, targets)
 
     metadata = {
@@ -400,6 +465,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
             "cut_source_png": str(cut_source_png),
             "cut_mask_png": str(cut_mask_png),
             "preview_png": str(preview_png),
+            "native_rects_plt": str(native_plt),
             "measurements_md": str(measurements_md),
         },
     }
@@ -411,6 +477,7 @@ def generate(cfg: CalibrationConfig, output_dir: Path, jpg_quality: int) -> dict
         "cut_source_png": cut_source_png,
         "cut_mask_png": cut_mask_png,
         "preview_png": preview_png,
+        "native_rects_plt": native_plt,
         "metadata_json": metadata_json,
         "measurements_md": measurements_md,
     }
@@ -423,6 +490,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--canvas-px", type=lambda value: parse_pair(value, "x", int), default=(1200, 2100))
     parser.add_argument("--nominal-media-mm", type=lambda value: parse_pair(value, "x", float), default=(100.0, 170.0))
     parser.add_argument("--cut-target-mm", type=lambda value: parse_pair(value, "x", float), default=(14.0, 14.0))
+    parser.add_argument("--print-scale-correction", type=lambda value: parse_pair(value, "x", float), default=(1.0, 1.0))
+    parser.add_argument("--print-offset-mm", type=lambda value: parse_pair(value, "x", float), default=(0.0, 0.0))
+    parser.add_argument("--transform-origin", choices=("origin", "center"), default="origin")
     parser.add_argument("--jpg-quality", type=int, default=95)
     return parser
 
@@ -436,6 +506,9 @@ def main() -> int:
         cut_target_mm=args.cut_target_mm,
         horizontal_scale_bar_mm=(10.0, 90.0, 62.0),
         vertical_scale_bar_mm=(62.0, 10.0, 160.0),
+        print_scale_correction=args.print_scale_correction,
+        print_offset_mm=args.print_offset_mm,
+        transform_origin=args.transform_origin,
     )
     outputs = generate(cfg, args.output_dir, args.jpg_quality)
     for path in outputs.values():
