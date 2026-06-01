@@ -88,7 +88,10 @@ tool default `--dilation 1.5` when intentionally expanding around opaque art.
 For simple rectangle calibration targets, `generate_calibration_sheet.py`
 writes a native `_native_rects.plt` file directly, so the app dylib is not
 needed for those rectangle-only cuts. Native rectangles include dylib-style
-lead-in/lead-out strokes at the lower-left starting corner.
+lead-in/lead-out strokes at the lower-left starting corner. PLT coordinates are
+rotated HPGL-like integer plotter units, about `40.52` units/mm for 4x7
+`1200x2100` masks; the native rectangle transform is fitted against
+`libplt_generator.dylib`.
 
 For custom sheets, inspect the preview for clipping, overlap, edge crowding,
 and mismatched print/cut geometry before sending the job. Ask for user review

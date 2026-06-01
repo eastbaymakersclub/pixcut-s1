@@ -20,9 +20,12 @@ DEFAULT_CANVAS_PX = (1200, 2100)
 DEFAULT_ADVERTISED_PRINTABLE_MM = (100.0, 170.0)
 DEFAULT_CUT_TARGET_MM = (14.0, 14.0)
 DEFAULT_JPG_QUALITY = 95
-PLOT_UNIT_SCALE = 1643 / 480
-PLOT_X_ORIGIN = 7153.75
-PLOT_Y_ORIGIN = -24.75
+# Fitted against libplt_generator.dylib output for 1200x2100 4x7 masks.
+# PLT coordinates are rotated relative to raster coordinates.
+PLOT_X_ORIGIN = 7153.032085400178
+PLOT_X_SCALE = 3.430810507522827
+PLOT_Y_ORIGIN = -24.928517197806514
+PLOT_Y_SCALE = 3.4315979710374447
 PLOT_TRAILER_X = 6476
 PLOT_TRAILER_Y = 0
 # Plot-unit offsets measured from libplt_generator.dylib rectangle output.
@@ -322,8 +325,8 @@ def build_preview(print_image: Image.Image, cut_mask: Image.Image) -> Image.Imag
 
 def image_point_to_plot(x_px: int, y_px: int) -> tuple[int, int]:
     return (
-        round(PLOT_X_ORIGIN - y_px * PLOT_UNIT_SCALE),
-        round(PLOT_Y_ORIGIN + x_px * PLOT_UNIT_SCALE),
+        round(PLOT_X_ORIGIN - y_px * PLOT_X_SCALE),
+        round(PLOT_Y_ORIGIN + x_px * PLOT_Y_SCALE),
     )
 
 

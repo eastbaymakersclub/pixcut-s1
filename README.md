@@ -74,6 +74,15 @@ If the requested cutline should sit exactly on the alpha edge of a design, use `
 
 For simple rectangular calibration targets, `generate_calibration_sheet.py` also writes a native PixCut PLT file directly. That path does not require `libplt_generator.dylib`; it is currently only intended for axis-aligned rectangles on the validated `1200x2100` 4x7 sticker raster. Native rectangles include dylib-style lead-in/lead-out strokes at the lower-left starting corner so the blade enters and exits outside the meaningful cut edge.
 
+PixCut PLT files use HPGL-like integer plotter units, not raster pixels. For `1200x2100` 4x7 masks, the dylib maps raster pixels into rotated PLT coordinates approximately as:
+
+```text
+plot_x = 7153.0320854 - image_y * 3.4308105
+plot_y =  -24.9285172 + image_x * 3.4315980
+```
+
+At the 300dpi raster scale this is about `40.52` PLT units/mm, or `0.0247mm` per PLT unit. The native rectangle writer is fitted against `libplt_generator.dylib` using that transform.
+
 The validated C signatures are:
 
 ```c
