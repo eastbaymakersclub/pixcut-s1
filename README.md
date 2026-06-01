@@ -98,6 +98,34 @@ python pixcut_usb.py print-cut output/ebmc_sticker_sheet_4x7_print.jpg \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
+## Calibration workflow
+
+The sticker-mode spec is `3.9 x 6.7 inches` / `100 x 170mm`. The current working raster for 4x7 sticker jobs is still `1200x2100`, so `generate_calibration_sheet.py` defaults to a nominal `100x170mm` coordinate system on that raster. This intentionally makes X and Y nominal pixel density different until measured calibration data tells us the real physical mapping.
+
+Generate a repeatable calibration print/cut sheet:
+
+```bash
+python generate_calibration_sheet.py
+python pixcut_usb.py make-plt output/calibration/pixcut_s1_calibration_100x170_cut_source.png \
+  -o output/calibration/pixcut_s1_calibration_100x170.plt \
+  --media-type sticker_4x7 --dilation 0 --kp 42
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
+  output/calibration/pixcut_s1_calibration_100x170.plt \
+  --media-size 4x7 --media-type sticker_4x7 \
+  --execute --wait-after-send 360 --poll-interval 5
+```
+
+The generator writes:
+
+- print PNG/JPEG
+- transparent cut-source PNG
+- cut mask PNG
+- preview PNG with the cutlines overlaid
+- metadata JSON
+- a measurement worksheet Markdown file
+
+The calibration sheet includes edge/inset printability rectangles, H/V print scale bars, and seven rectangular cut registration targets. For each cut target, measure from the printed blue center cross to the physical cut edge; the expected distance is half the target size. Direct USB calibration job `51` printed/cut successfully with seven cut contours and returned to `job-state: 9`.
+
 ## Job sending
 
 Dry run:
@@ -158,7 +186,7 @@ pixcut-s1/output/official_app_job_46_stina/
 
 4x7 layout calibration:
 
-- Use a `1200x2100` canvas for the working `4x7` media path. A `1200x2400` test printed/cut, but the output was distorted: the print measured about `41mm x 36mm` while cuts measured about `36mm x 36mm`.
+- Use a `1200x2100` canvas for the working `4x7` media path. The nominal sticker printing spec is `100x170mm`. A `1200x2400` test printed/cut, but the output was distorted: the print measured about `41mm x 36mm` while cuts measured about `36mm x 36mm`.
 - The top approximately `1.5mm` of the sheet may not image if artwork starts at physical `y=0`. Future layouts should reserve at least a `2mm` top feed/print guard (`24px` at the current `12px/mm`) and start the first cut/art row at `y>=24px`.
 
 To resend those exact known-good official artifacts through the Python sender:

@@ -36,8 +36,9 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
 
 - USB VID/PID: `302c:3101`.
 - Combined print/cut media: `--media-size 4x7 --media-type sticker_4x7`.
-- The working 4x7 canvas is `1200x2100` px, treated as `100mm x 175mm`
-  at `12 px/mm`.
+- The working 4x7 raster is `1200x2100` px. The nominal sticker printing spec
+  is `100 x 170mm`, so calibration uses `100x170mm` as the coordinate system
+  until measured correction data says otherwise.
 - Leave at least a `2mm` top feed/print guard. The top about `1.5mm` may not
   image if art starts at `y=0`.
 - Do not use a `1200x2400` canvas with the current 4x7 path; it printed and
@@ -87,6 +88,28 @@ tool default `--dilation 1.5` when intentionally expanding around opaque art.
 For custom sheets, inspect the preview for clipping, overlap, edge crowding,
 and mismatched print/cut geometry before sending the job. Ask for user review
 before printing when the user requested review or when the design changed.
+
+## Calibration Workflow
+
+Use this before precision layouts or when a user wants printable area, scale, or
+print/cut registration data.
+
+```sh
+python generate_calibration_sheet.py
+python pixcut_usb.py make-plt output/calibration/pixcut_s1_calibration_100x170_cut_source.png \
+  -o output/calibration/pixcut_s1_calibration_100x170.plt \
+  --media-type sticker_4x7 --dilation 0 --kp 42
+python pixcut_usb.py print-cut output/calibration/pixcut_s1_calibration_100x170_print.jpg \
+  output/calibration/pixcut_s1_calibration_100x170.plt \
+  --media-size 4x7 --media-type sticker_4x7 \
+  --execute --wait-after-send 360 --poll-interval 5
+```
+
+Review `output/calibration/pixcut_s1_calibration_100x170_preview.png` before
+printing. After printing, use the generated measurements Markdown file to
+record edge/inset visibility, H/V print scale, and cut target offsets. For cut
+targets, measure from the printed blue center cross to each physical cut edge;
+expected distance is half the cut target size.
 
 ## Print And Cut
 
@@ -138,4 +161,3 @@ or fails. To attach to an already-open app:
 ```sh
 .frida-venv/bin/python trace_liene_usb.py --attach "Liene Photo"
 ```
-
