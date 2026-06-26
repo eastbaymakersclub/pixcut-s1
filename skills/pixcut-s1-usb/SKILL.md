@@ -72,6 +72,12 @@ Idle status usually includes:
 {"result":["20","2000","::0"]}
 ```
 
+Observed paper/media-empty status during job `56`: printer state `60`,
+sub-state `3015`, alert `::5401`, job state `5`, job reason `50000`, and job
+sub-state `5000`. Loading paper allowed the same uploaded job to resume, so
+when `::5401` appears, ask the user to load media and keep polling before
+resending the job.
+
 If the device is not idle, poll again or ask the user to check paper, ribbon,
 cover, and LEDs.
 

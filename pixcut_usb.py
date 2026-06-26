@@ -71,6 +71,13 @@ MEDIA_TYPES = {
     "sticker_4x7": 2030,
 }
 
+PRINTER_STATE_ALERT_NOTES = {
+    "::5401": {
+        "meaning": "paper/media empty or missing",
+        "recovery": "Load media; an in-progress job may resume without being resent.",
+    },
+}
+
 
 class PixcutError(RuntimeError):
     pass
@@ -436,7 +443,42 @@ def generate_plt(
     print(f"wrote {len(data)} bytes to {output_path}")
 
 
+def collect_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for child in value.values():
+            strings.extend(collect_strings(child))
+        return strings
+    if isinstance(value, list):
+        strings = []
+        for child in value:
+            strings.extend(collect_strings(child))
+        return strings
+    return []
+
+
+def add_status_notes(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    notes = []
+    strings = collect_strings(value)
+    for alert, note in PRINTER_STATE_ALERT_NOTES.items():
+        if any(alert in item for item in strings):
+            notes.append({"type": "printer-state-alert", "code": alert, **note})
+
+    if not notes:
+        return value
+
+    annotated = dict(value)
+    annotated["status_notes"] = notes
+    return annotated
+
+
 def print_json(value: Any) -> None:
+    value = add_status_notes(value)
     print(json.dumps(value, indent=2, sort_keys=True))
 
 

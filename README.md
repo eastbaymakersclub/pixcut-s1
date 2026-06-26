@@ -56,6 +56,10 @@ Known good local response:
 
 Device info returned firmware `1.0.15_0054`, model `DHP700`, MAC `F0:13:C1:62:F3:9A`.
 
+Known fault/status observations:
+
+- Out of paper or missing media during device job `56` reported printer state `60`, sub-state `3015`, alert `::5401`, with job state `5`, job reason `50000`, and job sub-state `5000`. After loading new sticker paper, the printer resumed the same uploaded job without resending it. When this alert appears, load media and keep polling before creating a duplicate job.
+
 The official app can claim the USB interface. If PyUSB reports access denied, quit `Liene Photo.app` before probing.
 
 ## Cutter PLT generation
