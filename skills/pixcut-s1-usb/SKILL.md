@@ -1,13 +1,13 @@
 ---
 name: pixcut-s1-usb
-description: Generate, preview, trace, and send Liene PixCut S1 sticker print/cut jobs over direct USB from macOS using the reverse-engineered Python tooling.
+description: Generate, preview, trace, and send Liene PixCut S1 sticker print/cut jobs over direct USB, plus use the experimental BLE GATT tooling for status and protocol work.
 ---
 
-# PixCut S1 USB
+# PixCut S1 USB And BLE
 
 Use this skill when the user wants to design stickers, generate cutlines, probe
-printer status, print, cut, or continue USB reverse engineering for the Liene
-PixCut S1 from macOS.
+printer status, print, cut, or continue USB/BLE reverse engineering for the
+Liene PixCut S1 from macOS.
 
 ## Repository
 
@@ -55,6 +55,13 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
   sub-writes, and a `20ms` delay after each ACK. These are the script defaults.
 - The printer may report physical `media-size: 5009` / `paper_size: 3x3` even
   when 4x7 jobs work.
+- Confirmed BLE command path: Hannto frames over GATT service `0000ff00`,
+  write characteristic `0000ff02`, status notify `0000ff03`, data notify
+  `0000ff01`. The MLDP write characteristic `49535343-8841...` also answered
+  a small status request.
+- BLE jobs are experimental. The direct USB path is still the proven printing
+  path. BLE status and small JSON requests are confirmed; larger BLE responses
+  such as `device-info` currently truncate after one `182` byte notification.
 
 ## Status Checks
 
@@ -64,6 +71,14 @@ Quit `Liene Photo.app` before using direct USB if it may own the interface.
 python pixcut_usb.py probe
 python pixcut_usb.py get-prop printer-state printer-sub-state printer-state-alerts
 python pixcut_usb.py get-prop device-info media-size paper-size
+```
+
+Confirmed BLE status path:
+
+```sh
+python pixcut_ble.py get-prop --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  printer-state printer-sub-state printer-state-alerts
+python pixcut_ble.py probe-hannto-json --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF
 ```
 
 Idle status usually includes:
@@ -165,6 +180,20 @@ python pixcut_usb.py print-cut output/print.jpg output/cut.plt \
 Watch stdout/stderr for `job-state: 9` completion, `cut-contours`, and
 `cutting-progress`. If a job uploads but never starts, re-check `job-type=600`,
 PLT+image order, canvas size, and whether the Liene app is open.
+
+Experimental BLE dry-run and send use the same print/cut defaults but route via
+Hannto GATT frames. Keep the dry-run first and prefer USB when the user needs a
+reliable print:
+
+```sh
+python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
+  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --media-size 4x7 --media-type sticker_4x7
+python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
+  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --media-size 4x7 --media-type sticker_4x7 \
+  --execute --wait-after-send 360 --poll-interval 5
+```
 
 ## Example Generator
 
