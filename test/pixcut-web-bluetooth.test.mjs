@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_PRINT_CUT_OPTIONS,
+  PixcutWebBluetoothClient,
   buildComboJobRequest,
   buildCombinedPrintCutPayload,
   buildHanntoFrame,
@@ -76,6 +78,8 @@ test("parses complete frames from a noisy notification buffer", () => {
 test("builds combo job JSON using PixCut S1 defaults", () => {
   const request = buildComboJobRequest({ imageBytes: 64180, plotBytes: 160, id: 777 });
 
+  assert.equal(DEFAULT_PRINT_CUT_OPTIONS.ackDataWrites, true);
+  assert.equal(DEFAULT_PRINT_CUT_OPTIONS.chunkDelayMs, 0);
   assert.equal(request.method, "combo-job");
   assert.equal(request.id, 777);
   assert.equal(request.params[0].method, "print-job");
@@ -104,4 +108,27 @@ test("extracts job ids and printer status responses", () => {
     printerSubState: "3030",
     printerStateAlerts: "::0",
   });
+});
+
+test("treats ff00 status 0101 notifications as write ACKs", async () => {
+  const client = new PixcutWebBluetoothClient({ bluetooth: {}, log: () => {} });
+  const ack = client.waitForStatusAck(1000);
+
+  client.handleNotification("ff00-status", new Uint8Array([0x01, 0x01]));
+
+  await ack;
+});
+
+test("surfaces PixCut event.rpt_err notifications as device errors", async () => {
+  const client = new PixcutWebBluetoothClient({ bluetooth: {}, log: () => {} });
+  const errorFrame = buildHanntoFrame(
+    encoder.encode(JSON.stringify({ method: "event.rpt_err", params: { code: -8013, message: "job timeout" } }))
+  );
+
+  client.handleNotification("ff00-data", errorFrame);
+
+  await assert.rejects(
+    () => client.waitForStatusAck(1),
+    /PixCut reported code -8013: job timeout/
+  );
 });

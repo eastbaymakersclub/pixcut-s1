@@ -32,7 +32,10 @@ export const DEFAULT_PRINT_CUT_OPTIONS = Object.freeze({
   mediaType: MEDIA_TYPES.sticker_4x7,
   jobType: 600,
   dataChunkSize: 156,
-  chunkDelayMs: 5,
+  chunkDelayMs: 0,
+  ackDataWrites: true,
+  dataAckTimeoutMs: 2000,
+  dataWaitAfterSendMs: 1000,
   dataOrder: "plot-image",
   waitAfterSendMs: 360000,
   pollIntervalMs: 2000,
@@ -404,7 +407,9 @@ export class PixcutWebBluetoothClient {
     this.dataCharacteristic = null;
     this.nextId = Math.floor((globalThis.performance?.now?.() ?? Date.now()) * 1000) % 900000 + 1000;
     this.pending = new Map();
+    this.pendingStatusAcks = [];
     this.events = [];
+    this.lastDeviceError = null;
     this.dataBuffer = new Uint8Array(0);
   }
 
@@ -438,6 +443,7 @@ export class PixcutWebBluetoothClient {
 
     await this.statusCharacteristic.startNotifications();
     await this.dataCharacteristic.startNotifications();
+    this.lastDeviceError = null;
     this.statusCharacteristic.addEventListener("characteristicvaluechanged", (event) =>
       this.handleNotification("ff00-status", event.target.value)
     );
@@ -457,6 +463,11 @@ export class PixcutWebBluetoothClient {
   handleNotification(label, value) {
     const raw = toUint8Array(value);
     const event = { label, raw, hex: hex(raw) };
+
+    if (label === "ff00-status" && raw.length === 2 && raw[0] === 0x01 && raw[1] === 0x01) {
+      this.resolveStatusAck();
+    }
+
     if (label === "ff00-data") {
       this.dataBuffer = concatUint8Arrays([this.dataBuffer, raw]);
       const parsed = extractHanntoFrames(this.dataBuffer);
@@ -464,7 +475,15 @@ export class PixcutWebBluetoothClient {
       event.frames = parsed.frames;
       for (const frame of parsed.frames) {
         if (frame.json && typeof frame.json === "object") {
-          this.resolvePending(frame.json);
+          const deviceError = deviceErrorFromResponse(frame.json);
+          if (deviceError) {
+            this.lastDeviceError = deviceError;
+            this.log(deviceError.message);
+            this.rejectPendingRequests(deviceError);
+            this.rejectStatusAcks(deviceError);
+          } else {
+            this.resolvePending(frame.json);
+          }
         }
       }
     }
@@ -475,6 +494,44 @@ export class PixcutWebBluetoothClient {
         this.log(`BLE ${label} fragment: ${partial.textPrefix}`);
       }
     }
+  }
+
+  resolveStatusAck() {
+    const pending = this.pendingStatusAcks.shift();
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pending.resolve();
+  }
+
+  rejectStatusAcks(error) {
+    while (this.pendingStatusAcks.length) {
+      const pending = this.pendingStatusAcks.shift();
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  waitForStatusAck(timeoutMs) {
+    if (this.lastDeviceError) {
+      return Promise.reject(this.lastDeviceError);
+    }
+
+    return new Promise((resolve, reject) => {
+      const pending = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const index = this.pendingStatusAcks.indexOf(pending);
+          if (index >= 0) {
+            this.pendingStatusAcks.splice(index, 1);
+          }
+          reject(new PixcutWebBluetoothError(`Timed out waiting for BLE write ACK after ${timeoutMs}ms`));
+        }, timeoutMs),
+      };
+      this.pendingStatusAcks.push(pending);
+    });
   }
 
   resolvePending(response) {
@@ -488,15 +545,46 @@ export class PixcutWebBluetoothClient {
     pending.resolve(response);
   }
 
-  async writeFrame(frame) {
+  rejectPendingRequests(error) {
+    for (const [requestId, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      this.pending.delete(requestId);
+      pending.reject(error);
+    }
+  }
+
+  throwIfDeviceError() {
+    if (this.lastDeviceError) {
+      throw this.lastDeviceError;
+    }
+  }
+
+  async writeFrame(frame, options = {}) {
     if (!this.writeCharacteristic) {
       throw new PixcutWebBluetoothError("Not connected");
     }
-    if (typeof this.writeCharacteristic.writeValueWithoutResponse === "function") {
-      await this.writeCharacteristic.writeValueWithoutResponse(frame);
-      return;
+
+    const ackPromise = options.waitForAck
+      ? this.waitForStatusAck(options.ackTimeoutMs ?? DEFAULT_PRINT_CUT_OPTIONS.dataAckTimeoutMs)
+      : null;
+
+    try {
+      if (typeof this.writeCharacteristic.writeValueWithoutResponse === "function") {
+        await this.writeCharacteristic.writeValueWithoutResponse(frame);
+      } else {
+        await this.writeCharacteristic.writeValue(frame);
+      }
+    } catch (error) {
+      ackPromise?.catch(() => undefined);
+      this.rejectStatusAcks(errorFromUnknown(error));
+      throw error;
     }
-    await this.writeCharacteristic.writeValue(frame);
+
+    if (ackPromise) {
+      await ackPromise;
+    }
+
+    this.throwIfDeviceError();
   }
 
   async sendJsonObj(request, waitSeconds = 5) {
@@ -519,6 +607,7 @@ export class PixcutWebBluetoothClient {
       }, waitSeconds * 1000);
       this.pending.set(obj.id, { resolve, reject, timer });
     });
+    this.throwIfDeviceError();
     await this.writeFrame(frame);
     const response = await responsePromise;
     if (response.error || response.result?.["error-code"] !== undefined) {
@@ -563,14 +652,24 @@ export class PixcutWebBluetoothClient {
       splited: true,
     });
     let sent = 0;
+    this.throwIfDeviceError();
     for (let index = 0; index < frames.length; index += 1) {
-      await this.writeFrame(frames[index]);
+      await this.writeFrame(frames[index], {
+        waitForAck: merged.ackDataWrites,
+        ackTimeoutMs: merged.dataAckTimeoutMs,
+      });
       sent = Math.min(sent + Math.min(merged.dataChunkSize, data.length - sent), data.length);
       merged.onProgress?.({ sent, total: data.length, frame: index + 1, frames: frames.length });
       if (merged.chunkDelayMs > 0) {
         await sleep(merged.chunkDelayMs);
       }
     }
+
+    if (merged.dataWaitAfterSendMs > 0) {
+      await sleep(merged.dataWaitAfterSendMs);
+      this.throwIfDeviceError();
+    }
+
     return {
       jobId,
       dataBytes: data.length,
@@ -606,6 +705,7 @@ export class PixcutWebBluetoothClient {
 
   async printCut(imageBytes, plotBytes, options = {}) {
     const merged = { ...DEFAULT_PRINT_CUT_OPTIONS, ...options };
+    this.lastDeviceError = null;
     const create = await this.createPrintCutJob(imageBytes.length, plotBytes.length, merged);
     const payload = buildCombinedPrintCutPayload(imageBytes, plotBytes, merged.dataOrder);
     const upload = await this.sendJobData(create.jobId, payload, merged);
@@ -615,4 +715,23 @@ export class PixcutWebBluetoothClient {
     }
     return { jobId: create.jobId, createResponse: create.response, upload, wait };
   }
+}
+
+function deviceErrorFromResponse(response) {
+  if (response.method !== "event.rpt_err" || !response.params || typeof response.params !== "object") {
+    return null;
+  }
+
+  const details = [
+    response.params.code !== undefined ? `code ${response.params.code}` : undefined,
+    typeof response.params.message === "string" && response.params.message ? response.params.message : undefined,
+  ]
+    .filter(Boolean)
+    .join(": ");
+
+  return new PixcutWebBluetoothError(`PixCut reported ${details || "a device error"}`);
+}
+
+function errorFromUnknown(error) {
+  return error instanceof Error ? error : new Error(String(error));
 }
