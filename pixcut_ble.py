@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Experimental BLE tooling for the Liene PixCut S1.
+"""BLE tooling for the Liene PixCut S1.
 
 The working USB protocol frames commands as ``cmd json\n`` plus compact JSON,
 and streams job data as ``cmd data EXTLEN=...`` packets. The PixCut also
 advertises BLE GATT services. The Android app uses a related Hannto frame
 format over Bluetooth; this module can probe GATT characteristics, send small
-JSON commands over confirmed BLE data paths, and experimentally create/upload
-print jobs with an explicit ``--execute`` guard.
+JSON commands over confirmed BLE data paths, and create/upload print jobs with
+an explicit ``--execute`` guard.
 """
 
 from __future__ import annotations
@@ -30,13 +30,11 @@ from pixcut_usb import (
     CMD_JSON_HEADER,
     DEFAULT_JOB_TYPE,
     DEFAULT_PRINT_CUT_JOB_TYPE,
-    JOB_POLL_PROPS,
     MEDIA_SIZES,
     MEDIA_TYPES,
     PixcutError,
     STATUS_PROPS,
     add_status_notes,
-    extract_first_int,
     extract_job_id,
     find_error_code,
     resolve_int,
@@ -354,10 +352,11 @@ def decode_notification_payload(data: bytes) -> Any | None:
 
 
 class NotificationLog:
-    def __init__(self) -> None:
+    def __init__(self, *, verbose: bool = False) -> None:
         self.started = time.monotonic()
         self.events: list[dict[str, Any]] = []
         self.hannto_buffers: dict[str, bytearray] = {}
+        self.verbose = verbose
 
     def callback(self, label: str):
         def on_notify(char: Any, data: bytearray) -> None:
@@ -378,7 +377,8 @@ class NotificationLog:
             if hannto_frames:
                 event["hannto_frames"] = hannto_frames
             self.events.append(event)
-            print_json({"notification": event})
+            if self.verbose:
+                print_json({"notification": event})
 
         return on_notify
 
@@ -397,6 +397,68 @@ class NotificationLog:
                 if request_id is None or not isinstance(decoded, dict) or decoded.get("id") == request_id:
                     return decoded
         return None
+
+
+def notification_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    by_label: dict[str, int] = {}
+    by_payload: dict[str, int] = {}
+    decoded_json: list[Any] = []
+    partial_hannto_bodies: list[dict[str, Any]] = []
+    for event in events:
+        label = str(event.get("label", "unknown"))
+        by_label[label] = by_label.get(label, 0) + 1
+        data = event.get("data")
+        if isinstance(data, dict):
+            hex_value = str(data.get("hex", ""))
+            if hex_value:
+                raw = bytes.fromhex(hex_value)
+                if len(raw) > 20 and raw[0] == 0x7E:
+                    declared_body_len = struct.unpack("<H", raw[18:20])[0] & 0x03FF
+                    body = raw[20:]
+                    if body.endswith(b"~"):
+                        body = body[:-2]
+                    try:
+                        text_prefix = body.decode("utf-8", "replace")
+                    except UnicodeDecodeError:
+                        text_prefix = ""
+                    if text_prefix:
+                        partial_hannto_bodies.append(
+                            {
+                                "label": label,
+                                "declared_body_len": declared_body_len,
+                                "received_body_prefix_len": len(body),
+                                "text_prefix": text_prefix[:220],
+                            }
+                        )
+                if len(hex_value) > 96:
+                    hex_value = f"{hex_value[:96]}...({len(hex_value) // 2} bytes)"
+                key = f"{label}:{hex_value}"
+                by_payload[key] = by_payload.get(key, 0) + 1
+        if "json" in event:
+            decoded_json.append(event["json"])
+        for frame in event.get("hannto_frames", []):
+            if isinstance(frame, dict) and "json" in frame:
+                decoded_json.append(frame["json"])
+    return {
+        "count": len(events),
+        "by_label": by_label,
+        "by_payload": by_payload,
+        "decoded_json": decoded_json[:5],
+        "partial_hannto_bodies": partial_hannto_bodies[:5],
+    }
+
+
+def response_result(value: Any) -> Any | None:
+    if isinstance(value, dict):
+        return value.get("result")
+    return None
+
+
+def printer_status_tuple(value: Any) -> tuple[str | None, str | None, str | None]:
+    result = response_result(value)
+    if isinstance(result, list) and len(result) >= 3:
+        return (str(result[0]), str(result[1]), str(result[2]))
+    return (None, None, None)
 
 
 async def find_pixcut_address(scan_seconds: float, name: str | None, address: str | None) -> str:
@@ -624,7 +686,9 @@ class PixcutBLE:
         result = await self.send_hannto_json_probe(write_label, obj, wait_seconds)
         decoded = result["decoded_response"]
         if decoded is None:
-            raise PixcutBLEError(f"Timed out waiting for BLE JSON response id {obj.get('id')}: {result}")
+            detail = {key: value for key, value in result.items() if key != "notifications"}
+            detail["notification_summary"] = notification_summary(result.get("notifications", []))
+            raise PixcutBLEError(f"Timed out waiting for BLE JSON response id {obj.get('id')}: {detail}")
         error_code = find_error_code(decoded)
         if error_code is not None:
             raise PixcutError(f"Device returned error-code {error_code}: {decoded}")
@@ -783,7 +847,7 @@ class PixcutBLE:
             "data_bytes": len(data),
             "frame_count": len(frames),
             "data_chunk_size": data_chunk_size,
-            "notifications": self.notifications.events,
+            "notification_summary": notification_summary(self.notifications.events),
         }
 
 
@@ -930,28 +994,33 @@ async def wait_after_send(pixcut: PixcutBLE, args: argparse.Namespace, job_id: i
 
     deadline = time.monotonic() + args.wait_after_send
     poll_index = 0
-    failed_states = {7}
-    completed_states = {9}
+    saw_active = False
     while True:
         poll_index += 1
-        job_state: int | None = None
         try:
-            response = await pixcut.get_props(args.write, JOB_POLL_PROPS)
+            response = await pixcut.get_props(args.write, STATUS_PROPS)
         except Exception as exc:
             print_json({"job_id": job_id, "poll": poll_index, "poll_error": str(exc)})
         else:
-            print_json({"job_id": job_id, "poll": poll_index, "props": response})
-
-        try:
-            job_info = await pixcut.get_job_info(args.write, job_id)
-        except Exception as exc:
-            print_json({"job_id": job_id, "poll": poll_index, "job_info_error": str(exc)})
-        else:
-            print_json({"job_id": job_id, "poll": poll_index, "job_info": job_info})
-            job_state = extract_first_int(job_info, "job-state")
-
-        if job_state in failed_states or job_state in completed_states:
-            return
+            printer_state, printer_sub_state, alerts = printer_status_tuple(response)
+            if printer_state not in (None, "20"):
+                saw_active = True
+            print_json(
+                {
+                    "job_id": job_id,
+                    "poll": poll_index,
+                    "printer_state": printer_state,
+                    "printer_sub_state": printer_sub_state,
+                    "printer_state_alerts": alerts,
+                    "props": response,
+                }
+            )
+            if saw_active and printer_state == "20" and alerts in (None, "::0"):
+                print_json({"job_id": job_id, "status": "idle_after_active"})
+                return
+            if alerts not in (None, "::0"):
+                print_json({"job_id": job_id, "status": "alert", "printer_state_alerts": alerts})
+                return
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -962,6 +1031,11 @@ async def wait_after_send(pixcut: PixcutBLE, args: argparse.Namespace, job_id: i
 async def run_get_prop(args: argparse.Namespace) -> None:
     async with PixcutBLE(address=args.address, name=args.name, scan_seconds=args.scan_seconds) as pixcut:
         print_json(await pixcut.get_props(args.write, args.props, args.wait_seconds))
+
+
+async def run_get_job_info(args: argparse.Namespace) -> None:
+    async with PixcutBLE(address=args.address, name=args.name, scan_seconds=args.scan_seconds) as pixcut:
+        print_json(await pixcut.get_job_info(args.write, args.job_id, args.wait_seconds))
 
 
 async def run_send_json(args: argparse.Namespace) -> None:
@@ -1116,6 +1190,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_hannto_args(get_prop)
     get_prop.add_argument("props", nargs="+")
     get_prop.set_defaults(func=run_get_prop)
+
+    get_job_info = sub.add_parser("get-job-info", help="Read one job record over Hannto BLE")
+    add_hannto_args(get_job_info)
+    get_job_info.add_argument("job_id", type=int)
+    get_job_info.set_defaults(func=run_get_job_info)
 
     send_json = sub.add_parser("send-json", help="Send a raw JSON command object over Hannto BLE")
     add_hannto_args(send_json)

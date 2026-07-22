@@ -1,6 +1,6 @@
 # Liene PixCut S1 reverse-engineering notes
 
-This folder contains Python utilities for the Liene PixCut S1 sticker printer/cutter over USB and experimental BLE.
+This folder contains Python utilities for the Liene PixCut S1 sticker printer/cutter over USB and BLE.
 
 ## What is known
 
@@ -16,8 +16,9 @@ This folder contains Python utilities for the Liene PixCut S1 sticker printer/cu
 - The official SDK uses `10215` bytes of job payload per data frame. It wraps each chunk in the data frame above, splits the framed packet into `1024` byte USB bulk writes, waits for an ACK on `0x84`, then sleeps for about `20ms` before the next frame.
 - BLE exposes multiple writable GATT pipes. The confirmed direct BLE command path is Android-style Hannto framing over `0000ff00` service, write characteristic `0000ff02`, status notify `0000ff03`, and data notify `0000ff01`. The Microchip/ISSC MLDP service also accepts the same framed status request.
 - The Android app also writes `A_OUT_<phone-mac>` to `0000fe95` / `00000013` as a BLE handoff before using Bluetooth Classic SPP (`00001101-0000-1000-8000-00805f9b34fb`). Direct BLE framing means WebBluetooth is plausible for the GATT path, but the handoff/SPP path itself is not WebBluetooth-compatible.
+- A direct BLE print/cut smoke job has been validated on the local PixCut S1. The job used `combo-job`, `job-type=600`, PLT bytes followed by image bytes, and `156` job bytes per BLE Hannto frame. The printer assigned job id `66`, moved through active status (`40/3015`, `40/3021`, `40/3030`), then returned to idle (`20/2000/::0`) after printing and cutting. A later partial `get-job-info` response showed `job-state=9`, `job-sub-state=9000`, and `job-state-reason=90001`.
 
-The read-only USB probe, combined USB print/cut flow, and small BLE JSON request/response flow have been tested against the local printer. USB and BLE job commands require `--execute` before they can start print or cutter movement.
+The read-only USB probe, combined USB print/cut flow, small BLE JSON request/response flow, and a small BLE print/cut flow have been tested against the local printer. USB and BLE job commands require `--execute` before they can start print or cutter movement.
 
 ## Setup
 
@@ -67,7 +68,7 @@ Known good local response:
 
 Device info returned firmware `1.0.15_0054`, model `DHP700`, MAC `F0:13:C1:62:F3:9A`.
 
-BLE note: small JSON responses decode cleanly. Larger responses, such as `device-info`, currently arrive as a single 182-byte notification fragment without the continuation needed to complete the Hannto frame. Avoid relying on large BLE responses until response fragmentation is understood or worked around.
+BLE note: small JSON responses decode cleanly. Larger responses, such as `device-info` and `get-job-info`, currently arrive on macOS as a single 182-byte notification fragment without the continuation needed to complete the Hannto frame. Use short status polling (`printer-state`, `printer-sub-state`, `printer-state-alerts`) for job progress until response fragmentation or larger MTU handling is understood.
 
 Known fault/status observations:
 
@@ -191,7 +192,7 @@ For a combined print-and-cut job, the current working path is SDK-style upload f
 python pixcut_usb.py print-cut sticker.jpg cut.plt --media-size 4x7 --media-type sticker_4x7 --execute
 ```
 
-Experimental BLE dry run:
+BLE dry run:
 
 ```bash
 python pixcut_ble.py print-cut sticker.jpg cut.plt \
@@ -199,7 +200,7 @@ python pixcut_ble.py print-cut sticker.jpg cut.plt \
   --media-size 4x7 --media-type sticker_4x7
 ```
 
-Experimental BLE send:
+BLE send:
 
 ```bash
 python pixcut_ble.py print-cut sticker.jpg cut.plt \
@@ -208,7 +209,7 @@ python pixcut_ble.py print-cut sticker.jpg cut.plt \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
-The BLE job path uses the same `combo-job` JSON and PLT-then-image upload order as USB, but wraps JSON and job bytes in Android-style Hannto frames instead of USB `cmd json` / `cmd data` frames. The default BLE upload chunk is `156` job bytes per frame so each full Hannto frame stays within the observed `182` byte GATT write-without-response size. Increase `--ble-data-chunk-size` only after validating larger fragmented writes.
+The BLE job path uses the same `combo-job` JSON and PLT-then-image upload order as USB, but wraps JSON and job bytes in Android-style Hannto frames instead of USB `cmd json` / `cmd data` frames. The default BLE upload chunk is `156` job bytes per frame so each full Hannto frame stays within the observed `182` byte GATT write-without-response size. Increase `--ble-data-chunk-size` only after validating larger fragmented writes. `--wait-after-send` polls only short status fields because larger BLE JSON responses currently truncate on macOS.
 
 Known media values from the app assets:
 

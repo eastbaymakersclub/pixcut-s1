@@ -1,6 +1,6 @@
 ---
 name: pixcut-s1-usb
-description: Generate, preview, trace, and send Liene PixCut S1 sticker print/cut jobs over direct USB, plus use the experimental BLE GATT tooling for status and protocol work.
+description: Generate, preview, trace, and send Liene PixCut S1 sticker print/cut jobs over direct USB, plus use the BLE GATT tooling for status, protocol work, and small validated print/cut jobs.
 ---
 
 # PixCut S1 USB And BLE
@@ -59,9 +59,16 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
   write characteristic `0000ff02`, status notify `0000ff03`, data notify
   `0000ff01`. The MLDP write characteristic `49535343-8841...` also answered
   a small status request.
-- BLE jobs are experimental. The direct USB path is still the proven printing
-  path. BLE status and small JSON requests are confirmed; larger BLE responses
-  such as `device-info` currently truncate after one `182` byte notification.
+- BLE direct print/cut has been validated once on the local PixCut S1 with a
+  small 20mm smoke target: device job `66`, `combo-job`, `job-type=600`,
+  PLT bytes before image bytes, and `156` job bytes per BLE Hannto frame.
+  The printer moved through active statuses `40/3015`, `40/3021`, `40/3030`
+  and returned idle at `20/2000/::0`. A later partial `get-job-info` response
+  showed `job-state=9`, `job-sub-state=9000`, and reason `90001`.
+- The direct USB path remains the mature path for production sheets. BLE status
+  and small JSON requests are confirmed; larger BLE responses such as
+  `device-info` and `get-job-info` currently truncate after one `182` byte
+  notification on macOS.
 
 ## Status Checks
 
@@ -181,9 +188,9 @@ Watch stdout/stderr for `job-state: 9` completion, `cut-contours`, and
 `cutting-progress`. If a job uploads but never starts, re-check `job-type=600`,
 PLT+image order, canvas size, and whether the Liene app is open.
 
-Experimental BLE dry-run and send use the same print/cut defaults but route via
-Hannto GATT frames. Keep the dry-run first and prefer USB when the user needs a
-reliable print:
+BLE dry-run and send use the same print/cut defaults but route via Hannto GATT
+frames. Keep the dry-run first and prefer USB when the user needs the most
+reliable path:
 
 ```sh
 python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
@@ -194,6 +201,10 @@ python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
+
+`pixcut_ble.py --wait-after-send` polls short status fields only. Do not rely
+on large BLE JSON responses for progress on macOS until larger MTU or response
+fragmentation handling is understood.
 
 ## Example Generator
 
