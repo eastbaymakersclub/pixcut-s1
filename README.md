@@ -211,6 +211,34 @@ python pixcut_ble.py print-cut sticker.jpg cut.plt \
 
 The BLE job path uses the same `combo-job` JSON and PLT-then-image upload order as USB, but wraps JSON and job bytes in Android-style Hannto frames instead of USB `cmd json` / `cmd data` frames. The default BLE upload chunk is `156` job bytes per frame so each full Hannto frame stays within the observed `182` byte GATT write-without-response size. Increase `--ble-data-chunk-size` only after validating larger fragmented writes. `--wait-after-send` polls only short status fields because larger BLE JSON responses currently truncate on macOS.
 
+## Web Bluetooth browser client
+
+`web-bluetooth/` contains a dependency-free local browser client for the same
+confirmed BLE path. It implements:
+
+- Web Bluetooth device selection by PixCut name prefix
+- GATT connection to service `0000ff00`
+- JSON commands over write `0000ff02` and data notify `0000ff01`
+- short status polling with `printer-state`, `printer-sub-state`, and `printer-state-alerts`
+- guarded 4x7 `print-cut` uploads using `combo-job`, `job-type=600`, PLT bytes followed by image bytes, and `156` job bytes per BLE frame
+
+Run it from localhost:
+
+```bash
+python3 -m http.server 8765 --directory web-bluetooth
+open http://localhost:8765/
+```
+
+The browser still has to show its Bluetooth device picker, so the hardware
+connect/send path is a manual browser step. Automated coverage currently tests
+the protocol code and static browser load:
+
+```bash
+node --test test/pixcut-web-bluetooth.test.mjs
+node --check web-bluetooth/pixcut-web-bluetooth.mjs
+node --check web-bluetooth/app.mjs
+```
+
 Known media values from the app assets:
 
 - `3x3`: media size `5009`; currently reported by the local printer

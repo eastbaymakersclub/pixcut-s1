@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PixCut S1 Web Bluetooth</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>PixCut S1 Web Bluetooth</h1>
+          <p class="subtitle">4x7 sticker print-cut</p>
+        </div>
+        <div class="actions">
+          <button id="connect" type="button">Connect</button>
+          <button id="read-status" type="button">Status</button>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-label="Status">
+        <div>
+          <span>Device</span>
+          <strong id="device-status" data-kind="neutral">not connected</strong>
+        </div>
+        <div>
+          <span>Printer</span>
+          <strong id="printer-status" data-kind="neutral">unknown</strong>
+        </div>
+        <div>
+          <span>Files</span>
+          <strong id="file-status" data-kind="neutral">print none / plt none</strong>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <form class="tool-panel">
+          <fieldset>
+            <legend>Files</legend>
+            <label>
+              <span>Print image</span>
+              <input id="print-file" type="file" accept="image/jpeg">
+            </label>
+            <label>
+              <span>Cut PLT</span>
+              <input id="plt-file" type="file" accept=".plt,text/plain">
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Job</legend>
+            <label>
+              <span>Job type</span>
+              <input id="job-type" type="number" min="0" step="1">
+            </label>
+            <label>
+              <span>BLE chunk</span>
+              <input id="chunk-size" type="number" min="1" max="892" step="1">
+            </label>
+            <label>
+              <span>Wait seconds</span>
+              <input id="wait-seconds" type="number" min="0" step="1">
+            </label>
+            <label>
+              <span>Poll seconds</span>
+              <input id="poll-seconds" type="number" min="1" step="1">
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Send</legend>
+            <label class="checkbox-row">
+              <input id="arm-execute" type="checkbox">
+              <span>Arm execute</span>
+            </label>
+            <div class="button-row">
+              <button id="dry-run" type="button">Dry Run</button>
+              <button id="print-cut" type="button" class="primary">Print + Cut</button>
+            </div>
+            <progress id="progress" max="100" value="0"></progress>
+            <div id="progress-text" class="progress-text">idle</div>
+          </fieldset>
+        </form>
+
+        <section class="preview-panel" aria-label="Preview">
+          <div id="preview-empty" class="preview-empty">No image selected</div>
+          <img id="preview" alt="Selected print image preview" hidden>
+        </section>
+      </section>
+
+      <section class="log-panel" aria-label="Log">
+        <h2>Log</h2>
+        <div id="log" class="log"></div>
+      </section>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

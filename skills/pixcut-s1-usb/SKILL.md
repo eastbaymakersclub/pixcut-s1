@@ -206,6 +206,29 @@ python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
 on large BLE JSON responses for progress on macOS until larger MTU or response
 fragmentation handling is understood.
 
+## Web Bluetooth Client
+
+Use the local browser client when the user wants to try PixCut from Chrome or
+port the BLE protocol toward Web Bluetooth:
+
+```sh
+python3 -m http.server 8765 --directory web-bluetooth
+open http://localhost:8765/
+```
+
+The client lives in `web-bluetooth/` and implements the confirmed `ff00` GATT
+path, status reads, guarded 4x7 print-cut uploads, `combo-job`,
+`job-type=600`, PLT-before-image payload order, and `156` job bytes per BLE
+frame. Web Bluetooth device selection still requires the browser picker, so
+automated tests cover the pure protocol code and static browser load rather
+than end-to-end hardware selection:
+
+```sh
+node --test test/pixcut-web-bluetooth.test.mjs
+node --check web-bluetooth/pixcut-web-bluetooth.mjs
+node --check web-bluetooth/app.mjs
+```
+
 ## Example Generator
 
 For a known working local example:
