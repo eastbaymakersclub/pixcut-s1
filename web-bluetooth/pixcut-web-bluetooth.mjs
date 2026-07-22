@@ -40,6 +40,7 @@ export const DEFAULT_PRINT_CUT_OPTIONS = Object.freeze({
   waitAfterSendMs: 360000,
   pollIntervalMs: 2000,
 });
+const MAX_NOTIFICATION_PAYLOAD_SUMMARY = 16;
 
 export class PixcutWebBluetoothError extends Error {}
 
@@ -309,10 +310,15 @@ export function notificationSummary(events) {
       partialHanntoBodies.push({ label: event.label, ...partial });
     }
   }
+  const byPayloadEntries = Object.entries(byPayload);
+  const visibleByPayload = Object.fromEntries(
+    byPayloadEntries.slice(0, MAX_NOTIFICATION_PAYLOAD_SUMMARY)
+  );
   return {
     count: events.length,
     byLabel,
-    byPayload,
+    byPayload: visibleByPayload,
+    byPayloadOmitted: Math.max(0, byPayloadEntries.length - MAX_NOTIFICATION_PAYLOAD_SUMMARY),
     decodedJson: decodedJson.slice(0, 5),
     partialHanntoBodies: partialHanntoBodies.slice(0, 5),
   };
@@ -684,9 +690,32 @@ export class PixcutWebBluetoothClient {
     const deadline = Date.now() + merged.waitAfterSendMs;
     let sawActive = false;
     let poll = 0;
+    let lastResponse = undefined;
     while (Date.now() < deadline) {
+      this.throwIfDeviceError();
       poll += 1;
-      const response = await this.getStatus(merged.waitSeconds ?? 5);
+      let response;
+      try {
+        response = await this.getStatus(merged.waitSeconds ?? 5);
+      } catch (statusError) {
+        this.throwIfDeviceError();
+        const message = errorFromUnknown(statusError).message;
+        if (sawActive) {
+          this.log(`Status polling stopped after active print state: ${message}`);
+          return {
+            jobId,
+            poll,
+            status: "status_poll_timeout_after_active",
+            response: lastResponse,
+            error: message,
+          };
+        }
+
+        this.log(`Status poll ${poll} failed before active print state: ${message}`);
+        await sleep(Math.min(merged.pollIntervalMs, Math.max(0, deadline - Date.now())));
+        continue;
+      }
+      lastResponse = response;
       const status = printerStatusTuple(response);
       if (status.printerState && status.printerState !== "20") {
         sawActive = true;
@@ -700,7 +729,7 @@ export class PixcutWebBluetoothClient {
       }
       await sleep(Math.min(merged.pollIntervalMs, Math.max(0, deadline - Date.now())));
     }
-    return { jobId, poll, status: "timeout" };
+    return { jobId, poll, status: "timeout", response: lastResponse };
   }
 
   async printCut(imageBytes, plotBytes, options = {}) {

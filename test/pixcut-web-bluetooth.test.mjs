@@ -11,6 +11,7 @@ import {
   extractHanntoFrames,
   extractJobId,
   hanntoChecksum,
+  notificationSummary,
   parseHanntoFrame,
   printerStatusTuple,
 } from "../web-bluetooth/pixcut-web-bluetooth.mjs";
@@ -131,4 +132,38 @@ test("surfaces PixCut event.rpt_err notifications as device errors", async () =>
     () => client.waitForStatusAck(1),
     /PixCut reported code -8013: job timeout/
   );
+});
+
+test("caps notification summary payload fingerprints", () => {
+  const events = Array.from({ length: 20 }, (_, index) => ({
+    label: "ff00-data",
+    raw: new Uint8Array([index]),
+    hex: index.toString(16).padStart(2, "0"),
+  }));
+  const summary = notificationSummary(events);
+
+  assert.equal(Object.keys(summary.byPayload).length, 16);
+  assert.equal(summary.byPayloadOmitted, 4);
+});
+
+test("does not fail a print wait when status polling times out after active state", async () => {
+  const client = new PixcutWebBluetoothClient({ bluetooth: {}, log: () => {} });
+  let calls = 0;
+
+  client.getStatus = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { result: ["40", "3016", "::0"], id: 1 };
+    }
+    throw new Error("status request lost");
+  };
+
+  const result = await client.waitForIdleAfterActive(70, {
+    waitAfterSendMs: 1000,
+    pollIntervalMs: 1,
+  });
+
+  assert.equal(result.status, "status_poll_timeout_after_active");
+  assert.equal(result.error, "status request lost");
+  assert.deepEqual(result.response, { result: ["40", "3016", "::0"], id: 1 });
 });
