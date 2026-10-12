@@ -1,5 +1,4 @@
 interface:
-  display_name: "PixCut S1 USB"
-  short_description: "Print and cut PixCut S1 stickers over USB"
-  default_prompt: "Use $pixcut-s1-usb to design, preview, and print a PixCut S1 sticker sheet over USB."
-
+  display_name: "PixCut S1 USB & Bluetooth"
+  short_description: "Print and cut PixCut S1 stickers over USB or Bluetooth"
+  default_prompt: "Use $pixcut-s1-usb to design, preview, and print a PixCut S1 sticker sheet using my printer's USB or Bluetooth connection."

@@ -19,24 +19,46 @@ This folder contains Python utilities for the Liene PixCut S1 sticker printer/cu
 - A direct BLE print/cut smoke job has been validated on the local PixCut S1. The job used `combo-job`, `job-type=600`, PLT bytes followed by image bytes, and `156` job bytes per BLE Hannto frame. The printer assigned job id `66`, moved through active status (`40/3015`, `40/3021`, `40/3030`), then returned to idle (`20/2000/::0`) after printing and cutting. A later partial `get-job-info` response showed `job-state=9`, `job-sub-state=9000`, and `job-state-reason=90001`.
 - A browser-originated Album Cards print/cut job failed with `event.rpt_err` code `-8013` / `job timeout` when job data frames were written without flow control. Waiting for each `ff00-status` notification payload `0101` as a per-write ACK fixed that Web Bluetooth path; the LED went pink during transfer and the sheet printed/cut successfully.
 - A later successful browser print/cut produced the physical output but one post-upload `get-prop` status poll timed out. Treat status-poll loss after any active printer state as nonfatal (`status_poll_timeout_after_active`); continue to fail immediately on actual `event.rpt_err` device errors.
+- A full 4x7 sheet with seven cut contours completed over native Python BLE using an ACK-paced wrapper: `507905` bytes, `3256` acknowledged writes, and device job `20`. After a paper-empty pause, loading media resumed the same job; it progressed through printing/cutting and returned idle. A partial BLE job-info response confirmed `job-state=9`, `job-sub-state=9000`, and reason `90001`. The wrapper's ACK pacing is now integrated into `pixcut_ble.py` with automated regression coverage.
 
-The read-only USB probe, combined USB print/cut flow, small BLE JSON request/response flow, and a small BLE print/cut flow have been tested against the local printer. USB and BLE job commands require `--execute` before they can start print or cutter movement.
+The read-only USB probe, combined USB print/cut flow, small BLE JSON request/response flow, and small and full-sheet BLE print/cut flows have been tested against local printers. USB and BLE job commands require `--execute` before they can start print or cutter movement.
 
 ## Setup
 
+Use an existing checkout, or clone the repository into your workspace:
+
 ```bash
-cd /Users/johnboiles/Developer/repos/eastbaymakersclub/pixcut-s1
+git clone https://github.com/eastbaymakersclub/pixcut-s1.git
+cd pixcut-s1
+```
+
+Run the tools from the checkout with Python 3.10 or newer. Setup on macOS:
+
+```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+```
+
+USB access also needs a libusb backend. With Homebrew on macOS:
+
+```bash
 brew install libusb
 ```
 
-On Apple Silicon Macs, if PyUSB cannot find libusb:
+Native BLE does not require the libusb backend.
 
-```bash
-export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
-```
+## Choosing a connection
+
+- Use `pixcut_usb.py` when the printer is connected by USB.
+- Use `pixcut_ble.py` for native Bluetooth printing from Python. Chrome is not
+  required, and the native sender includes ACK pacing for full sheets.
+- Use the optional [Web Bluetooth client](#web-bluetooth-browser-client) when
+  you want a browser workflow or native hardware access is unavailable.
+
+The shared agent skill is [skills/pixcut-s1-usb/SKILL.md](skills/pixcut-s1-usb/SKILL.md).
+It locates the checkout and discovers the current printer instead of assuming
+another user's filesystem path or Bluetooth address.
 
 ## Probe
 
@@ -47,13 +69,23 @@ python pixcut_usb.py get-prop device-info
 python pixcut_usb.py get-prop media-size paper-size
 ```
 
-BLE status over the confirmed `ff00` GATT path:
+Discover the intended BLE printer first:
 
 ```bash
-python pixcut_ble.py services --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF
-python pixcut_ble.py get-prop --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+python pixcut_ble.py scan --scan-seconds 10
+```
+
+Set `PIXCUT_ADDRESS` to the address returned for your printer. Use the name to
+choose the correct device when more than one PixCut is present; rescan if a
+previously saved address is no longer found. Then read status over the confirmed
+`ff00` GATT path:
+
+```bash
+export PIXCUT_ADDRESS="<address returned by scan>"
+python pixcut_ble.py services --address "$PIXCUT_ADDRESS"
+python pixcut_ble.py get-prop --address "$PIXCUT_ADDRESS" \
   printer-state printer-sub-state printer-state-alerts
-python pixcut_ble.py probe-hannto-json --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF
+python pixcut_ble.py probe-hannto-json --address "$PIXCUT_ADDRESS"
 ```
 
 Known good local response:
@@ -74,7 +106,7 @@ BLE note: small JSON responses decode cleanly. Larger responses, such as `device
 
 Known fault/status observations:
 
-- Out of paper or missing media during device job `56` reported printer state `60`, sub-state `3015`, alert `::5401`, with job state `5`, job reason `50000`, and job sub-state `5000`. After loading new sticker paper, the printer resumed the same uploaded job without resending it. When this alert appears, load media and keep polling before creating a duplicate job.
+- Out of paper or missing media during device job `56` reported printer state `60`, sub-state `3015`, alert `::5401`, with job state `5`, job reason `50000`, and job sub-state `5000`. After loading new sticker paper, the printer resumed the same uploaded job without resending it. When this alert appears, load media and keep polling before creating a duplicate job. Native BLE `--wait-after-send` continues polling this alert until its deadline; if monitoring expires, check the existing printer/job state before sending anything else.
 
 The official app can claim the USB interface. If PyUSB reports access denied, quit `Liene Photo.app` before probing.
 
@@ -138,6 +170,10 @@ The current local printer/media profile is recorded in `pixcut_s1_profile.json`.
 - print scale correction: `0.9891938513 x 0.9843598616`
 - safe print margins: top `1.3mm`, right `1.2mm`, bottom `1.3mm`, left `0.6mm`
 
+These measurements belong to the calibrated printer/media path. Treat them as
+a starting point on another printer and verify calibration when exact dimensions
+matter.
+
 `generate_calibration_sheet.py` defaults to that current local print scale correction. Override `--print-scale-correction` only when testing a new profile.
 
 Generate a repeatable calibration print/cut sheet:
@@ -198,7 +234,7 @@ BLE dry run:
 
 ```bash
 python pixcut_ble.py print-cut sticker.jpg cut.plt \
-  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --address "$PIXCUT_ADDRESS" \
   --media-size 4x7 --media-type sticker_4x7
 ```
 
@@ -206,12 +242,36 @@ BLE send:
 
 ```bash
 python pixcut_ble.py print-cut sticker.jpg cut.plt \
-  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --address "$PIXCUT_ADDRESS" \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
-The BLE job path uses the same `combo-job` JSON and PLT-then-image upload order as USB, but wraps JSON and job bytes in Android-style Hannto frames instead of USB `cmd json` / `cmd data` frames. The default BLE upload chunk is `156` job bytes per frame so each full Hannto frame stays within the observed `182` byte GATT write-without-response size. Increase `--ble-data-chunk-size` only after validating larger fragmented writes. The `ff00-status` notification payload `0101` acts as a per-write ACK; Web Bluetooth uploads should wait for it after every job-data frame rather than relying on a fixed delay. `--wait-after-send` polls only short status fields because larger BLE JSON responses currently truncate on macOS; a dropped status response after the printer has reported an active state is not by itself a failed job.
+The BLE job path uses the same `combo-job` JSON and PLT-then-image upload order
+as USB, but wraps JSON and job bytes in Android-style Hannto frames instead of
+USB `cmd json` / `cmd data` frames. The default BLE upload chunk is `156` job
+bytes per frame so each full Hannto frame stays within the observed `182` byte
+GATT write-without-response size. Increase `--ble-data-chunk-size` only after
+validating larger fragmented writes.
+
+The native Python sender and Web Bluetooth client both pace default `ff00`
+uploads using the `ff00-status` payload `0101`. Python waits for an ACK after
+each ATT write, subscribes before sending job data, and stops on a missing ACK
+or `event.rpt_err` without retransmitting. Inspect the existing job before
+retrying an uncertain upload to avoid duplicate sheets.
+
+`--wait-after-send` polls short status fields because larger BLE JSON responses
+currently truncate on macOS. Transient poll failures remain inconclusive and
+polling continues until the deadline; a paper-empty alert lets the same job
+resume after loading media. Neither a lost response nor a monitoring timeout
+confirms completion.
+
+Native Bluetooth regression tests use simulated notifications and do not move
+the printer:
+
+```bash
+python -m unittest discover -s test -p 'test_*.py'
+```
 
 ## Web Bluetooth browser client
 
@@ -229,7 +289,7 @@ Run it from localhost:
 
 ```bash
 python3 -m http.server 8765 --directory web-bluetooth
-open http://localhost:8765/
+open -a "Google Chrome" http://localhost:8765/
 ```
 
 The browser still has to show its Bluetooth device picker, so the hardware
@@ -303,10 +363,13 @@ Earlier 2026-05-27 direct-USB hardware results:
 
 ## Official app tracing
 
-A Frida tracing environment is installed under `.frida-venv` for the next successful Liene app print. The tracer hooks `device_sdk_create_print_cut_job`, `DeviceSDK::sendJobData`, and the lower-level USB transfer methods so we can capture actual argument order, combined payload prefix, and raw `cmd json` / `cmd data` frames from the app.
+A local Frida tracing environment can be kept under `.frida-venv`; it is not
+included in a clone. The tracer hooks `device_sdk_create_print_cut_job`,
+`DeviceSDK::sendJobData`, and the lower-level USB transfer methods to capture
+argument order, combined payload prefixes, and raw app frames. Run from the
+repository checkout after preparing that optional environment:
 
 ```bash
-cd /Users/johnboiles/Developer/repos/eastbaymakersclub/pixcut-s1
 .frida-venv/bin/python trace_liene_usb.py --spawn --log-file output/frida_trace_$(date +%Y%m%d_%H%M%S).jsonl
 ```
 

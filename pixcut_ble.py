@@ -112,6 +112,10 @@ class PixcutBLEError(RuntimeError):
     pass
 
 
+class PixcutBLEDeviceError(PixcutBLEError):
+    """An asynchronous event.rpt_err from the printer, not a missing response."""
+
+
 def bytes_summary(data: bytes) -> dict[str, Any]:
     summary: dict[str, Any] = {"len": len(data), "hex": data.hex()}
     try:
@@ -357,6 +361,30 @@ class NotificationLog:
         self.events: list[dict[str, Any]] = []
         self.hannto_buffers: dict[str, bytearray] = {}
         self.verbose = verbose
+        self.device_error: PixcutBLEDeviceError | None = None
+        self.device_error_event = asyncio.Event()
+        self.pending_ack: asyncio.Future[None] | None = None
+
+    def check_error(self) -> None:
+        if self.device_error is not None:
+            raise self.device_error
+
+    async def wait(self, seconds: float) -> None:
+        """Wait between operations, but stop immediately on a device error."""
+        self.check_error()
+        if seconds > 0:
+            try:
+                await asyncio.wait_for(self.device_error_event.wait(), seconds)
+            except asyncio.TimeoutError:
+                pass
+        self.check_error()
+
+    def expect_ack(self) -> asyncio.Future[None]:
+        self.check_error()
+        if self.pending_ack is not None:
+            raise PixcutBLEError("A BLE write ACK is already pending")
+        self.pending_ack = asyncio.get_running_loop().create_future()
+        return self.pending_ack
 
     def callback(self, label: str):
         def on_notify(char: Any, data: bytearray) -> None:
@@ -376,6 +404,17 @@ class NotificationLog:
             hannto_frames = extract_hannto_frames(buffer)
             if hannto_frames:
                 event["hannto_frames"] = hannto_frames
+            decoded_values = [decoded, *(frame.get("json") for frame in hannto_frames)]
+            for value in decoded_values:
+                if isinstance(value, dict) and value.get("method") == "event.rpt_err":
+                    if self.device_error is None:
+                        self.device_error = PixcutBLEDeviceError(f"PixCut device error: {value}")
+                    self.device_error_event.set()
+                    if self.pending_ack is not None and not self.pending_ack.done():
+                        self.pending_ack.set_exception(self.device_error)
+            if label == "ff00-status" and raw == b"\x01\x01":
+                if self.pending_ack is not None and not self.pending_ack.done():
+                    self.pending_ack.set_result(None)
             self.events.append(event)
             if self.verbose:
                 print_json({"notification": event})
@@ -383,6 +422,7 @@ class NotificationLog:
         return on_notify
 
     def clear(self) -> None:
+        # Clearing response history must not erase a fatal error from this connection.
         self.events.clear()
         self.hannto_buffers.clear()
         self.started = time.monotonic()
@@ -548,7 +588,18 @@ class PixcutBLE:
                     return char
         raise PixcutBLEError(f"Characteristic not found: {uuid}")
 
-    async def write_frame(self, uuid: str, data: bytes, *, response: bool | None = None) -> None:
+    async def write_frame(
+        self,
+        uuid: str,
+        data: bytes,
+        *,
+        response: bool | None = None,
+        wait_for_ack: bool = False,
+        ack_timeout: float = 10.0,
+    ) -> None:
+        self.notifications.check_error()
+        if wait_for_ack and uuid.lower() != WRITE_CHARS["ff00-ff02"]:
+            raise PixcutBLEError("Per-write ACKs are only validated on ff00-ff02")
         char = self.characteristic(uuid)
         if response is None:
             response = "write-without-response" not in char.properties
@@ -561,8 +612,28 @@ class PixcutBLE:
         if chunk_size <= 0:
             chunk_size = 20
         for offset in range(0, len(data), chunk_size):
-            await self.ble.write_gatt_char(uuid, data[offset : offset + chunk_size], response=response)
-            await asyncio.sleep(0.02)
+            self.notifications.check_error()
+            if not wait_for_ack:
+                await self.ble.write_gatt_char(uuid, data[offset : offset + chunk_size], response=response)
+                await self.notifications.wait(0.02)
+                continue
+            # Register before write_gatt_char: the notification may arrive inline.
+            pending = self.notifications.expect_ack()
+            try:
+                await self.ble.write_gatt_char(uuid, data[offset : offset + chunk_size], response=response)
+                await asyncio.wait_for(pending, timeout=ack_timeout)
+                self.notifications.check_error()
+            except asyncio.TimeoutError as exc:
+                raise PixcutBLEError(
+                    f"Timed out after {ack_timeout:g}s waiting for BLE write ACK; "
+                    "upload stopped without resending"
+                ) from exc
+            finally:
+                self.notifications.pending_ack = None
+                if not pending.done():
+                    pending.cancel()
+                elif not pending.cancelled():
+                    pending.exception()
 
     async def write_label(self, label: str, data: bytes, *, response: bool | None = None) -> None:
         await self.write_frame(WRITE_CHARS[label], data, response=response)
@@ -653,6 +724,7 @@ class PixcutBLE:
         *,
         response: bool | None = None,
     ) -> dict[str, Any]:
+        self.notifications.check_error()
         request_id = obj.get("id")
         if request_id is None:
             request_id = self.next_id
@@ -661,13 +733,13 @@ class PixcutBLE:
         payload = json.dumps(obj, separators=(",", ":")).encode("utf-8")
         frames = build_hannto_packets(payload)
         subscribed = await self.start_notifications(NOTIFY_CHARS)
-        await asyncio.sleep(0.5)
-        self.notifications.clear()
         try:
+            await self.notifications.wait(0.5)
+            self.notifications.clear()
             for frame in frames:
                 await self.write_label(write_label, frame, response=response)
-                await asyncio.sleep(0.1)
-            await asyncio.sleep(wait_seconds)
+                await self.notifications.wait(0.1)
+            await self.notifications.wait(wait_seconds)
         finally:
             await self.stop_notifications(subscribed)
 
@@ -684,6 +756,7 @@ class PixcutBLE:
 
     async def send_json_obj(self, write_label: str, obj: dict[str, Any], wait_seconds: float = 5.0) -> Any:
         result = await self.send_hannto_json_probe(write_label, obj, wait_seconds)
+        self.notifications.check_error()
         decoded = result["decoded_response"]
         if decoded is None:
             detail = {key: value for key, value in result.items() if key != "notifications"}
@@ -814,7 +887,9 @@ class PixcutBLE:
         data_chunk_size: int = 156,
         chunk_delay: float = 0.005,
         wait_seconds: float = 1.0,
+        ack_timeout: float = 10.0,
     ) -> dict[str, Any]:
+        self.notifications.check_error()
         frames = build_hannto_packets(
             data,
             job_id=job_id,
@@ -825,22 +900,29 @@ class PixcutBLE:
             splited=True,
         )
         subscribed = await self.start_notifications(NOTIFY_CHARS)
-        await asyncio.sleep(0.5)
-        self.notifications.clear()
+        ack_writes = write_label == "ff00-ff02"
         sent = 0
         next_report = 0
         try:
+            if ack_writes and not {"ff00-status", "ff00-data"}.issubset(subscribed):
+                raise PixcutBLEError("Job upload requires ff00-status and ff00-data notifications")
+            await self.notifications.wait(0.5)
+            self.notifications.clear()
             for index, frame in enumerate(frames, start=1):
-                await self.write_label(write_label, frame)
+                await self.write_frame(
+                    WRITE_CHARS[write_label], frame,
+                    wait_for_ack=ack_writes, ack_timeout=ack_timeout,
+                )
                 sent = min(sent + min(data_chunk_size, max(0, len(data) - sent)), len(data))
                 if sent >= next_report or index == len(frames):
                     print(f"sent {sent}/{len(data)} bytes over BLE ({index}/{len(frames)} frames)", file=sys.stderr)
                     next_report = sent + 16384
                 if chunk_delay > 0:
-                    await asyncio.sleep(chunk_delay)
-            await asyncio.sleep(wait_seconds)
+                    await self.notifications.wait(chunk_delay)
+            await self.notifications.wait(wait_seconds)
         finally:
             await self.stop_notifications(subscribed)
+        self.notifications.check_error()
         return {
             "job_id": job_id,
             "write_label": write_label,
@@ -995,16 +1077,25 @@ async def wait_after_send(pixcut: PixcutBLE, args: argparse.Namespace, job_id: i
     deadline = time.monotonic() + args.wait_after_send
     poll_index = 0
     saw_active = False
-    while True:
+    while time.monotonic() < deadline:
+        pixcut.notifications.check_error()
         poll_index += 1
         try:
             response = await pixcut.get_props(args.write, STATUS_PROPS)
+        except PixcutBLEDeviceError:
+            raise
         except Exception as exc:
+            pixcut.notifications.check_error()
             print_json({"job_id": job_id, "poll": poll_index, "poll_error": str(exc)})
         else:
+            pixcut.notifications.check_error()
             printer_state, printer_sub_state, alerts = printer_status_tuple(response)
-            if printer_state not in (None, "20"):
+            if printer_state == "40" and alerts in (None, "::0"):
                 saw_active = True
+            if alerts == "::5401":
+                # A paper wait is not evidence of printing. Require a fresh
+                # active state after loading paper before confirming completion.
+                saw_active = False
             print_json(
                 {
                     "job_id": job_id,
@@ -1018,14 +1109,18 @@ async def wait_after_send(pixcut: PixcutBLE, args: argparse.Namespace, job_id: i
             if saw_active and printer_state == "20" and alerts in (None, "::0"):
                 print_json({"job_id": job_id, "status": "idle_after_active"})
                 return
-            if alerts not in (None, "::0"):
+            if alerts == "::5401":
+                print_json({"job_id": job_id, "status": "waiting_for_media", "printer_state_alerts": alerts})
+            elif alerts not in (None, "::0"):
                 print_json({"job_id": job_id, "status": "alert", "printer_state_alerts": alerts})
                 return
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return
-        await asyncio.sleep(min(args.poll_interval, remaining))
+            break
+        await pixcut.notifications.wait(min(args.poll_interval, remaining))
+    pixcut.notifications.check_error()
+    print_json({"job_id": job_id, "status": "timeout", "saw_active": saw_active})
 
 
 async def run_get_prop(args: argparse.Namespace) -> None:

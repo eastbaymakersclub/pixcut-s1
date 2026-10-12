@@ -1,6 +1,6 @@
 ---
 name: pixcut-s1-usb
-description: Generate, preview, trace, and send Liene PixCut S1 sticker print/cut jobs over direct USB, plus use the BLE GATT tooling for status, protocol work, and small validated print/cut jobs.
+description: Design, preview, and print/cut Liene PixCut S1 sticker sheets on macOS using direct USB or native Bluetooth, with an optional Web Bluetooth client and protocol tracing tools.
 ---
 
 # PixCut S1 USB And BLE
@@ -11,26 +11,50 @@ Liene PixCut S1 from macOS.
 
 ## Repository
 
-Work from:
+Locate an existing checkout containing `pixcut_usb.py` and `pixcut_ble.py`.
+When this skill is loaded from the repository, the checkout is two directories
+above the skill folder. A separately installed copy of the skill may not include
+the Python tools; clone the repository into the task's workspace if needed:
 
 ```sh
-cd /Users/johnboiles/Developer/repos/eastbaymakersclub/pixcut-s1
+git clone https://github.com/eastbaymakersclub/pixcut-s1.git
+cd pixcut-s1
 ```
 
-Setup:
+Run the commands below from the checkout with Python 3.10 or newer. Reuse its
+virtual environment when available; otherwise set it up:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+```
+
+USB access also needs a libusb backend. With Homebrew on macOS:
+
+```sh
 brew install libusb
 ```
 
-If PyUSB cannot find libusb on Apple Silicon:
+Native BLE does not require the libusb backend.
 
-```sh
-export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
-```
+`make-plt` uses the official Liene Photo app's native libraries. Install the app
+under `/Applications`, mount its DMG, or set `PIXCUT_APP_FRAMEWORKS` to its
+`Contents/Frameworks` directory when those libraries are missing.
+
+## Choose A Connection
+
+- Honor the user's requested connection. For a local macOS task, use the Python
+  tools: USB when connected, or `pixcut_ble.py` for wireless printing. Native
+  Bluetooth does not require Chrome.
+- Use the Web Bluetooth client when the user requests a browser workflow or
+  when native hardware access is unavailable and a supported local browser is
+  available. A missing USB cable alone is a reason to try native BLE.
+- If sandboxed hardware access reports no USB device or unsupported Bluetooth,
+  use the environment's normal hardware-access approval mechanism when available
+  before concluding the Mac cannot reach the printer.
+- Discover the user's printer as described below. Do not reuse a printer address
+  or filesystem path from another machine or from an old example.
 
 ## Known Good Defaults
 
@@ -43,7 +67,9 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
 - The current local printer profile is in `pixcut_s1_profile.json`. For
   dimensionally accurate local layouts, use print scale correction
   `0.9891938513 x 0.9843598616` and safe print margins top `1.3mm`, right
-  `1.2mm`, bottom `1.3mm`, left `0.6mm`.
+  `1.2mm`, bottom `1.3mm`, left `0.6mm`. These measurements are specific to the
+  calibrated printer/media path. On another printer, treat them as a starting
+  point and verify calibration when exact dimensions matter.
 - Leave at least a `2mm` top feed/print guard. The top about `1.5mm` may not
   image if art starts at `y=0`.
 - Do not use a `1200x2400` canvas with the current 4x7 path; it printed and
@@ -59,14 +85,16 @@ export LIBUSB_PATH=/opt/homebrew/opt/libusb/lib/libusb-1.0.dylib
   write characteristic `0000ff02`, status notify `0000ff03`, data notify
   `0000ff01`. The MLDP write characteristic `49535343-8841...` also answered
   a small status request.
-- BLE direct print/cut has been validated once on the local PixCut S1 with a
-  small 20mm smoke target: device job `66`, `combo-job`, `job-type=600`,
-  PLT bytes before image bytes, and `156` job bytes per BLE Hannto frame.
-  The printer moved through active statuses `40/3015`, `40/3021`, `40/3030`
-  and returned idle at `20/2000/::0`. A later partial `get-job-info` response
-  showed `job-state=9`, `job-sub-state=9000`, and reason `90001`.
-- The direct USB path remains the mature path for production sheets. BLE status
-  and small JSON requests are confirmed; larger BLE responses such as
+- Native BLE print/cut has completed both a small smoke target and a full 4x7
+  seven-sticker sheet. The full-sheet run used an ACK-paced Python wrapper;
+  that upload behavior is now integrated into `pixcut_ble.py`: `combo-job`,
+  `job-type=600`, PLT before JPEG, `156` job bytes per Hannto frame, and a
+  `ff00-status` payload `0101` acknowledgment after each BLE write.
+- An ACK timeout or `event.rpt_err` stops the upload without retransmission.
+  Inspect the existing job before retrying; do not automatically create a
+  duplicate print job after an uncertain transfer or lost status response.
+- USB remains the mature path when connected. Native BLE supports wireless
+  production sheets; larger BLE responses such as
   `device-info` and `get-job-info` currently truncate after one `182` byte
   notification on macOS.
 
@@ -80,13 +108,25 @@ python pixcut_usb.py get-prop printer-state printer-sub-state printer-state-aler
 python pixcut_usb.py get-prop device-info media-size paper-size
 ```
 
-Confirmed BLE status path:
+For BLE, scan first:
 
 ```sh
-python pixcut_ble.py get-prop --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
-  printer-state printer-sub-state printer-state-alerts
-python pixcut_ble.py probe-hannto-json --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF
+python pixcut_ble.py scan --scan-seconds 10
 ```
+
+Select the intended PixCut from the returned names and addresses. If several
+printers are present and the target is unclear, ask the user which one. Set
+`PIXCUT_ADDRESS` to the actual returned address, then use it consistently:
+
+```sh
+export PIXCUT_ADDRESS="<address returned by scan>"
+python pixcut_ble.py get-prop --address "$PIXCUT_ADDRESS" \
+  printer-state printer-sub-state printer-state-alerts
+python pixcut_ble.py probe-hannto-json --address "$PIXCUT_ADDRESS"
+```
+
+Rescan if a saved address is not found; addresses are not portable across Macs
+and printer replacements.
 
 Idle status usually includes:
 
@@ -98,7 +138,8 @@ Observed paper/media-empty status during job `56`: printer state `60`,
 sub-state `3015`, alert `::5401`, job state `5`, job reason `50000`, and job
 sub-state `5000`. Loading paper allowed the same uploaded job to resume, so
 when `::5401` appears, ask the user to load media and keep polling before
-resending the job.
+resending the job. The BLE `--wait-after-send` monitor keeps polling this alert
+until its deadline so the same job can resume after paper is loaded.
 
 If the device is not idle, poll again or ask the user to check paper, ribbon,
 cover, and LEDs.
@@ -126,8 +167,9 @@ rotated HPGL-like integer plotter units, about `40.52` units/mm for 4x7
 `libplt_generator.dylib`.
 
 For custom sheets, inspect the preview for clipping, overlap, edge crowding,
-and mismatched print/cut geometry before sending the job. Ask for user review
-before printing when the user requested review or when the design changed.
+and mismatched print/cut geometry before sending the job. If the user already
+asked to print, proceed after inspecting the preview and dry run. Ask for user
+review when they requested it or when a material change needs their input.
 
 ## Calibration Workflow
 
@@ -176,7 +218,7 @@ python pixcut_usb.py print-cut output/print.jpg output/cut.plt \
   --media-size 4x7 --media-type sticker_4x7
 ```
 
-Send only after review:
+Send after preview inspection and dry run, when printing is authorized:
 
 ```sh
 python pixcut_usb.py print-cut output/print.jpg output/cut.plt \
@@ -188,32 +230,32 @@ Watch stdout/stderr for `job-state: 9` completion, `cut-contours`, and
 `cutting-progress`. If a job uploads but never starts, re-check `job-type=600`,
 PLT+image order, canvas size, and whether the Liene app is open.
 
-BLE dry-run and send use the same print/cut defaults but route via Hannto GATT
-frames. Keep the dry-run first and prefer USB when the user needs the most
-reliable path:
+BLE dry-run and send use the same print/cut defaults via Hannto GATT frames.
+Use the address discovered above; no browser or local wrapper is needed:
 
 ```sh
 python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
-  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --address "$PIXCUT_ADDRESS" \
   --media-size 4x7 --media-type sticker_4x7
 python pixcut_ble.py print-cut output/print.jpg output/cut.plt \
-  --address 4133B034-D252-CEE5-A0DC-150BCE8D4DBF \
+  --address "$PIXCUT_ADDRESS" \
   --media-size 4x7 --media-type sticker_4x7 \
   --execute --wait-after-send 360 --poll-interval 5
 ```
 
 `pixcut_ble.py --wait-after-send` polls short status fields only. Do not rely
 on large BLE JSON responses for progress on macOS until larger MTU or response
-fragmentation handling is understood.
+fragmentation handling is understood. Transient status-poll failures keep
+polling until the deadline and are not proof of completion or a reason to resend.
 
 ## Web Bluetooth Client
 
-Use the local browser client when the user wants to try PixCut from Chrome or
-port the BLE protocol toward Web Bluetooth:
+Use this optional route when the user wants Chrome/Web Bluetooth, is developing
+the browser client, or native access is unavailable as described above:
 
 ```sh
 python3 -m http.server 8765 --directory web-bluetooth
-open http://localhost:8765/
+open -a "Google Chrome" http://localhost:8765/
 ```
 
 The client lives in `web-bluetooth/` and implements the confirmed `ff00` GATT
@@ -246,6 +288,8 @@ Review `output/ebmc_sticker_sheet_4x7_preview.png` before printing
 
 Use tracing only when reverse engineering official app behavior. Traces may
 contain account or local metadata, so do not paste full logs into final answers.
+The optional `.frida-venv` environment must be prepared separately; it is not
+included in a clone.
 
 ```sh
 .frida-venv/bin/python trace_liene_usb.py --spawn \
